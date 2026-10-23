@@ -1,6 +1,6 @@
 {
   "name": "gladys-tailwind",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant external integration for Tailwind garage door controllers (iQ3, Light): door state, open, close and status LED, over their local API. Unofficial, not affiliated with Tailwind.",
   "type": "module",

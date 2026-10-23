@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-23
+
 ### Added
 
 - Tailwind garage door controllers (iQ3, Light) over their local API, without
@@ -51,4 +53,5 @@ the notes of the version's GitHub Release.
 - "Check the controllers" action; reachability on the transport badge; states
   within the Gladys rate limit.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-tailwind/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-tailwind/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-tailwind/releases/tag/v0.1.1
