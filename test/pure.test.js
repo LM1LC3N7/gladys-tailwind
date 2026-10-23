@@ -4,7 +4,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createFakeGladys } from '@gladysassistant/integration-sdk/testing';
 import { normalizeConfig, parseAddress, parseAddresses } from '../src/config.js';
 import { buildDevice, commandOf, valuesOf } from '../src/model.js';
@@ -16,7 +17,7 @@ import {
   mergeLayout,
   readingOf,
 } from '../src/tailwind/parse.js';
-import { emptyData, sanitize } from '../src/store.js';
+import { FileStore, emptyData, sanitize } from '../src/store.js';
 
 /** The fixtures of gotailwind (tests/fixtures), as the firmware answers. */
 const FIXTURE = {
@@ -181,8 +182,10 @@ test('/data: checked when read back, bounded, never a key', () => {
         '192.168.1.61': { kind: 'auth', until: now + 1 },
       },
       authBlocks: {
-        '192.168.1.60': { fingerprint: 'a'.repeat(64), at: now + 10 ** 12 },
+        '192.168.1.60': { fingerprint: 'a7', at: now + 10 ** 12 },
         '192.168.1.61': { fingerprint: '123456' },
+        // A full fingerprint (an older file) is never read back.
+        '192.168.1.62': { fingerprint: 'a'.repeat(64), at: now },
       },
       guards: {
         '3ce90e6d2184-0': { from: 0, expect: 1, until: now + 10 ** 12 },
@@ -198,10 +201,29 @@ test('/data: checked when read back, bounded, never a key', () => {
   assert.deepEqual(data.devices['3ce90e6d2184'].layout, { doors: [0], led: true });
   assert.deepEqual(Object.keys(data.blocks), ['192.168.1.60']);
   assert.equal(data.blocks['192.168.1.60'].until, now + 6 * 60 * 60_000);
-  assert.deepEqual(data.authBlocks, { '192.168.1.60': { fingerprint: 'a'.repeat(64), at: now } });
+  assert.deepEqual(data.authBlocks, { '192.168.1.60': { fingerprint: 'a7', at: now } });
   assert.deepEqual(Object.keys(data.guards), ['3ce90e6d2184-0']);
   assert.equal(data.guards['3ce90e6d2184-0'].until, now + 45_000);
   assert.deepEqual(Object.keys(sanitize(null)), Object.keys(emptyData()));
+});
+
+test('H4: a synchronous save (a guard) is never overwritten by an older save in progress', async (t) => {
+  const dir = fileURLToPath(new URL('../data/test-store/', import.meta.url));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const store = new FileStore({ dir });
+  const older = emptyData();
+  const newer = {
+    ...emptyData(),
+    guards: { '3ce90e6d2184-0': { from: 0, expect: 1, at: 1, until: 2 } },
+  };
+  const pending = store.save(older);
+  store.saveSync(newer);
+  assert.ok(
+    JSON.parse(readFileSync(store.path, 'utf8')).guards['3ce90e6d2184-0'],
+    'on disk at once',
+  );
+  await pending;
+  assert.ok(JSON.parse(readFileSync(store.path, 'utf8')).guards['3ce90e6d2184-0'], 'still there');
 });
 
 test('/data keeps the most recent last reads within the limit', () => {

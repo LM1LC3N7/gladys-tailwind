@@ -71,13 +71,23 @@ bougé depuis sa lecture peut l'arrêter ou l'inverser. Donc :
   n'est envoyé. Une porte dans un état inconnu, désactivée dans l'application
   Tailwind ou bloquée par le contrôleur est refusée.
 - Après une commande, la suivante de cette porte attend que la porte soit lue
-  là où elle a été envoyée, 15 s au moins et 45 s au plus après (le capteur lit
-  « ouverte » dès que la porte quitte la position fermée, bien avant la fin de
-  course). Cette garde est enregistrée avant le départ de la requête : un
-  redémarrage la conserve.
-- Un **Fermer** annule les ouvertures de sa porte pas encore parties. Il n'est
-  jamais retenu par une pause demandée par le contrôleur (HTTP 429 ou 5xx) ni
-  par une clé refusée : il a un essai, jamais renouvelé.
+  là où elle a été envoyée : **30 s au moins après une ouverture** (le capteur
+  lit « ouverte » dès que la porte quitte la position fermée, bien avant la
+  fin d'une course qui peut durer 30 s), 15 s après une fermeture (« fermée »
+  n'est lu qu'en fin de course), 45 s au plus. Cette garde est écrite dans
+  les fichiers de l'intégration avant le départ de la requête : un
+  redémarrage la conserve ; elle est mesurée sur une horloge qu'un changement
+  de l'heure du système ne déplace pas.
+- Un **Fermer** n'attend jamais derrière une autre commande, de sa porte ou
+  d'une autre : fermer trois portes à la fois envoie trois commandes. Il
+  annule les ouvertures de sa porte pas encore parties. Il n'est jamais
+  retenu par une pause demandée par le contrôleur (HTTP 429 ou 5xx) ni par une
+  clé refusée : il a un essai, jamais renouvelé. Les ouvertures d'une même
+  porte passent une à une.
+- Le même bouton pressé à nouveau sur la même porte dans les 5 s d'un appui
+  qui n'a rien envoyé (porte déjà dans cet état, ou refus) reçoit la même
+  réponse sans relire le contrôleur : une scène en boucle ne le submerge
+  jamais. La luminosité du voyant change au plus une fois toutes les 2 s.
 - Une commande part dans les 3,5 s du clic ou est refusée sans rien envoyer.
   Si elle a pu atteindre le contrôleur sans réponse, Gladys indique
   « envoyée, sans confirmation » et relit la porte ; elle n'est jamais
@@ -95,8 +105,10 @@ bougé depuis sa lecture peut l'arrêter ou l'inverser. Donc :
   ou que vous n'appuyez pas sur « Vérifier les contrôleurs » une fois la clé
   corrigée (une lecture, jamais plus souvent que l'intervalle). La clé n'est
   jamais écrite dans les journaux ni dans les fichiers de l'intégration :
-  seule une empreinte salée d'une clé refusée est gardée, et effacée au
-  premier succès.
+  seuls 8 bits d'une empreinte salée d'une clé refusée sont gardés (on ne
+  peut pas en retrouver la clé), effacés au premier succès. Une entrée du
+  champ des adresses qui n'est pas une adresse n'est jamais affichée dans
+  l'état, seulement comptée.
 - Le mode nuit, les notifications envoyées par le contrôleur et la découverte
   mDNS ne sont pas encore pris en charge.
 - La plupart des contrôleurs Tailwind sont vendus en Amérique du Nord :

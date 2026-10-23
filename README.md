@@ -34,17 +34,21 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (TailwindApp)
   the wall-button input of the opener (a toggle on most openers), so "Open"
   is sent only to a door read closed just now, "Close" only to a door read
   open; unknown, disabled or locked out is refused. BOTH are off by default
-  ("Allow opening and closing the garage doors"), queued per controller, and
-  a close cancels the pending openings of its door; a close is never held by
-  a 429/5xx pause nor by a refused key (one try). After each command a guard
-  per door, set before the first byte and persisted, refuses another one
-  until a read sent after it shows the door where it was sent (15 s at least,
-  45 s at most). See [docs/en.md](docs/en.md#command-safety).
-- **Status LED**: `status_led`, confirmed only by the value read back.
+  ("Allow opening and closing the garage doors"). Openings are queued per
+  door; a close is in no queue (never behind a read or a slow answer), cancels
+  the pending openings of its door, and is never held by a 429/5xx pause nor
+  by a refused key (one try). After each command a guard per door, written to
+  `/data` synchronously before the first byte and timed on a monotonic clock,
+  refuses another one until a read sent after it shows the door where it was
+  sent (30 s at least after an opening, 15 s after a closing, 45 s at most).
+  The same press within 5 s of one that sent nothing is answered without a
+  new read. See [docs/en.md](docs/en.md#command-safety).
+- **Status LED**: `status_led`, confirmed only by the value read back; one
+  command every 2 s at most.
 - **The key** is never logged, nor put in a status, an error or `/data`. A
-  refused key (`token fail`) is final for that address: only a salted
-  fingerprint is kept (never one of a key that works on any controller), and
-  removed at the first success.
+  refused key (`token fail`) is final for that address: only 8 bits of a
+  salted fingerprint are kept (the key cannot be found back; never for a key
+  that works on any controller), removed at the first success.
 
 ## Development
 

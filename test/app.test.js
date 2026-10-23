@@ -6,6 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { createFakeGladys } from '@gladysassistant/integration-sdk/testing';
 import { TailwindApp } from '../src/app.js';
 import { TailwindClient } from '../src/tailwind/client.js';
@@ -33,10 +34,20 @@ const realTimers = {
   clearTimeout: (handle) => clearTimeout(handle),
 };
 
+/**
+ * The wall clock and a monotonic clock: `advance` moves both (time passing),
+ * `jump` only the wall clock (NTP, a change by hand).
+ */
 function clock(start = 1_800_000_000_000) {
   let current = start;
+  let elapsed = 0;
   const now = () => current;
+  now.mono = () => elapsed;
   now.advance = (ms) => {
+    current += ms;
+    elapsed += ms;
+  };
+  now.jump = (ms) => {
     current += ms;
   };
   return now;
@@ -69,6 +80,7 @@ async function setup(
     store,
     timers: appTimers,
     now,
+    mono: now.mono,
   });
   registerHandlers(gladys, app, logger);
   await gladys.connect();
@@ -231,27 +243,51 @@ test('open: decided on a status read just now, one command, the door guarded', a
   assert.equal(net.commands().length, 3);
 });
 
-test('the guard is lifted only by the state aimed at, at least 15 s after the command', async (t) => {
+test('I2: the guard is lifted by the state aimed at, 30 s after an opening, 15 s after a closing', async (t) => {
   const { gladys, net, app, now } = await setup(t, { config: { allow_open: true } });
   net.table[A].moves = false;
   assert.equal((await press(gladys, MACS.a, 'door1_open')).success, true);
-  // Unknown or unchanged: not lifted.
-  for (const status of ['x', undefined, 'close']) {
+  // Young guard: refused at once, whatever is read (nothing read).
+  const reads = net.reads().length;
+  for (const status of ['x', undefined, 'close', 'open']) {
     net.door(A, 0).status = status;
     const ack = await press(gladys, MACS.a, 'door1_close');
     assert.equal(ack.success, false, `status ${status}`);
   }
-  assert.ok(guardOf(app, MACS.a));
-  // Open, as the command aimed, but too soon (the sensor reads it open as
-  // soon as it leaves closed): kept.
-  net.door(A, 0).status = 'open';
-  now.advance(10_000);
+  assert.equal(net.reads().length, reads);
+  // Read "open" 16 s and 29 s after the opening: the door may still travel
+  // (the sensor reads it open as soon as it leaves closed): kept.
+  for (const step of [16_000, 13_000]) {
+    now.advance(step);
+    assert.match((await press(gladys, MACS.a, 'door1_close')).error, /vient d'être commandée/);
+  }
+  // 30 s: an unknown state does not lift it.
+  now.advance(1000);
+  net.door(A, 0).status = 'x';
   assert.equal((await press(gladys, MACS.a, 'door1_close')).success, false);
+  assert.ok(guardOf(app, MACS.a));
   now.advance(5000);
+  net.door(A, 0).status = 'open';
   const ack = await press(gladys, MACS.a, 'door1_close');
   assert.equal(ack.success, true, ack.error);
   assert.equal(net.commands().length, 2);
   assert.equal(guardOf(app, MACS.a).expect, 0);
+  // After a closing, "close" is only read at the end of travel: 15 s.
+  net.door(A, 0).status = 'close';
+  now.advance(14_000);
+  assert.equal((await press(gladys, MACS.a, 'door1_open')).success, false);
+  now.advance(1000);
+  const open = await press(gladys, MACS.a, 'door1_open');
+  assert.equal(open.success, true, open.error);
+  assert.equal(net.commands().length, 3);
+});
+
+test('H3: a close 16 s after an opening, door read open, is never sent', async (t) => {
+  const { gladys, net, now } = await setup(t, { config: { allow_open: true } });
+  assert.equal((await press(gladys, MACS.a, 'door1_open')).success, true);
+  now.advance(16_000);
+  assert.equal((await press(gladys, MACS.a, 'door1_close')).success, false);
+  assert.equal(net.commands().length, 1);
 });
 
 test('an answer generated before the command never lifts its guard', async (t) => {
@@ -283,11 +319,16 @@ test('an answer generated before the command never lifts its guard', async (t) =
 });
 
 test('close: only to a door read open; already closed sends nothing', async (t) => {
-  const { gladys, net } = await setup(t, { config: { allow_open: true } });
+  const { gladys, net, now } = await setup(t, { config: { allow_open: true } });
   const closed = await press(gladys, MACS.a, 'door1_close');
   assert.equal(closed.success, true, closed.error);
   assert.equal(net.commands().length, 0);
   net.door(A, 0).status = 'open';
+  // The same press within 5 s: answered without a read, nothing sent.
+  const reads = net.reads().length;
+  assert.match((await press(gladys, MACS.a, 'door1_close')).error, /il y a un instant/);
+  assert.equal(net.reads().length, reads);
+  now.advance(5000);
   const ack = await press(gladys, MACS.a, 'door1_close');
   assert.equal(ack.success, true, ack.error);
   assert.equal(net.commands().length, 1);
@@ -295,7 +336,7 @@ test('close: only to a door read open; already closed sends nothing', async (t) 
 });
 
 test('an unknown, disabled or locked out door is never commanded', async (t) => {
-  const { gladys, net } = await setup(t, { config: { allow_open: true } });
+  const { gladys, net, now } = await setup(t, { config: { allow_open: true } });
   const cases = [
     [{ status: 'opening' }, /n'est pas lue/],
     [{ status: undefined }, /n'est pas lue/],
@@ -304,6 +345,8 @@ test('an unknown, disabled or locked out door is never commanded', async (t) => 
     [{ lockup: 'x', status: 'open' }, /pas pu être lu/],
   ];
   for (const [change, error] of cases) {
+    // Past the 5 s in which the same press gets the same answer.
+    now.advance(5000);
     Object.assign(net.door(A, 0), { status: 'close', lockup: 0, disabled: 0 }, change);
     for (const key of ['door1_open', 'door1_close']) {
       const ack = await press(gladys, MACS.a, key);
@@ -316,6 +359,7 @@ test('an unknown, disabled or locked out door is never commanded', async (t) => 
     }
   }
   // A door that disappeared from the status.
+  now.advance(5000);
   delete net.table[A].status.data.door1;
   assert.match((await press(gladys, MACS.a, 'door1_close')).error, /pas pu être lu/);
   assert.equal(net.commands().length, 0);
@@ -367,7 +411,18 @@ test('a refused key: final for that address, persisted, never replayed; Check re
   await app.stop();
   const saved = JSON.stringify(store.data);
   assert.ok(!saved.includes(KEY));
-  assert.match(saved, /"authBlocks":\{"192\.168\.1\.60":\{"fingerprint":"[0-9a-f]{64}"/);
+  // I3: 8 bits only, the key can never be found back from /data.
+  assert.match(saved, /"authBlocks":\{"192\.168\.1\.60":\{"fingerprint":"[0-9a-f]{2}"/);
+  const { salt } = store.data;
+  const fingerprint = store.data.authBlocks[A].fingerprint;
+  let candidates = 0;
+  for (let i = 0; i < 1_000_000; i += 1) {
+    const guess = String(i).padStart(6, '0');
+    if (createHmac('sha256', salt).update(guess).digest('hex').startsWith(fingerprint)) {
+      candidates += 1;
+    }
+  }
+  assert.ok(candidates > 1000, `${candidates} keys match the fingerprint`);
   // "Check the controllers": one read, still refused.
   await gladys.fake.action('check_controllers');
   assert.equal(readsOf(), 2);
@@ -422,6 +477,22 @@ test('a close cancels the openings of its door still waiting to leave', async (t
   release();
   assert.match(a.error, /Annulée/);
   assert.match(b.error, /Annulée/);
+  assert.equal(close.success, true, close.error);
+  assert.deepEqual(
+    net.commands().map((c) => JSON.parse(c.body).data.value.cmd),
+    ['close'],
+  );
+});
+
+test('a close cancels an opening of its door whose connection is not up yet', async (t) => {
+  const { gladys, net } = await setup(t, { config: { allow_open: true } });
+  const release = net.hold(A, 'door');
+  const open = press(gladys, MACS.a, 'door1_open');
+  await tick(20);
+  net.door(A, 0).status = 'open';
+  const close = await press(gladys, MACS.a, 'door1_close');
+  release();
+  assert.match((await open).error, /Annulée/);
   assert.equal(close.success, true, close.error);
   assert.deepEqual(
     net.commands().map((c) => JSON.parse(c.body).data.value.cmd),
@@ -611,7 +682,8 @@ test('after a restart a door can be closed before the first read; the guard is k
   const refused = await press(second.gladys, MACS.a, 'door1_open');
   assert.match(refused.error, /vient d'être commandée/);
   net.door(A, 0).status = 'open';
-  now.advance(14_000);
+  // 30 s after the opening: its guard may be lifted by the door read open.
+  now.advance(28_000);
   const close = await press(second.gladys, MACS.a, 'door1_close');
   assert.equal(close.success, true, close.error);
   assert.equal(net.reads().length, reads + 1, 'only the read of the close');
@@ -624,17 +696,20 @@ test('a restart while a command is out keeps its guard (set in beforeSend)', asy
   const first = await setup(t, { store, net, now, config: { allow_open: true } });
   net.table[A].moves = false;
   const request = first.app.client.request;
+  let onDiskAtSend;
   first.app.client.request = (options) => {
     if (options.body.includes('door_op')) {
       options.beforeSend?.();
+      // http.js writes the request synchronously right after beforeSend:
+      // the guard must be in the store already, not in a save to come.
+      onDiskAtSend = Boolean(store.data.guards[`${MACS.a}-0`]);
       return new Promise(() => {});
     }
     return request(options);
   };
   void press(first.gladys, MACS.a, 'door1_open');
   await tick();
-  await first.app.saving;
-  assert.ok(store.data.guards[`${MACS.a}-0`], 'saved before the first byte');
+  assert.equal(onDiskAtSend, true, 'H4: written before the first byte');
   now.advance(1500);
   const second = await setup(t, {
     store,
@@ -733,7 +808,7 @@ test('no device id, or a firmware older than 10.10: said in the status, never ad
 });
 
 test('LED: no permission needed, confirmed only by the value read back', async (t) => {
-  const { gladys, net, app } = await setup(t);
+  const { gladys, net, now } = await setup(t);
   const ack = await press(gladys, MACS.a, 'led', 40);
   assert.equal(ack.success, true, ack.error);
   assert.deepEqual(
@@ -741,10 +816,16 @@ test('LED: no permission needed, confirmed only by the value read back', async (
     ['status', 'led', 'status'],
   );
   assert.equal(JSON.parse(net.leds()[0].body).data.value.brightness, 40);
+  // H9: a slider or a loop: at most one LED command every 2 s, nothing read.
+  const calls = net.calls.length;
+  assert.match((await press(gladys, MACS.a, 'led', 41)).error, /moins de 2 s/);
+  assert.equal(net.calls.length, calls);
+  now.advance(2000);
   // Already at that value: nothing sent.
   assert.equal((await press(gladys, MACS.a, 'led', 40)).success, true);
   assert.equal(net.leds().length, 1);
   // Not read back at the value: sent, without confirmation.
+  now.advance(2000);
   net.table[A].ledSticks = true;
   const stuck = await press(gladys, MACS.a, 'led', 10);
   assert.match(stuck.error, /sans confirmation/);
@@ -752,7 +833,24 @@ test('LED: no permission needed, confirmed only by the value read back', async (
     assert.equal((await press(gladys, MACS.a, 'led', value)).success, false, String(value));
   }
   assert.equal(net.leds().length, 2);
-  assert.ok(app);
+});
+
+test('H9: a scene pressing a button every second reads at most once per 5 s', async (t) => {
+  const { gladys, net, now } = await setup(t, { config: { allow_open: true } });
+  const before = net.reads().length;
+  for (let i = 0; i < 60; i += 1) {
+    now.advance(1000);
+    await press(gladys, MACS.a, 'door1_close');
+  }
+  assert.ok(net.reads().length - before <= 12, `${net.reads().length - before} reads`);
+  assert.equal(net.commands().length, 0);
+});
+
+test('H8: a key pasted in the addresses field never shows in the status', async (t) => {
+  const { gladys } = await setup(t, { config: { addresses: `${A}:${KEY}0, ${KEY}, ${B}` } });
+  const all = JSON.stringify(gladys.fake.connectionStatus);
+  assert.ok(!all.includes(KEY), all);
+  assert.match(gladys.fake.connectionStatus.message.fr, /2 entrée\(s\) du champ des adresses/);
 });
 
 test('a close behind a command that LEFT is refused at once, "just commanded"', async (t) => {
@@ -775,31 +873,103 @@ test('a close behind a command that LEFT is refused at once, "just commanded"', 
   assert.match(close.error, /vient d'être commandée/);
 });
 
-test('the wait in the queue ends by 3.3 s (real timer), with its reason', async (t) => {
+test('openings: one queue per door, the wait ends by 3.3 s (real timer) with its reason', async (t) => {
   const { gladys, net } = await setup(t, {
     config: { allow_open: true },
     appTimers: realTimers,
   });
+  // A second opening of the SAME door waits behind the first one's slow read.
   const release = net.hold(A, 'status');
   const first = press(gladys, MACS.a, 'door1_open');
   await tick();
   const started = Date.now();
-  const second = await press(gladys, MACS.a, 'door2_open');
+  const second = await press(gladys, MACS.a, 'door1_open');
   const waited = Date.now() - started;
   assert.ok(waited >= 3000 && waited < 3500, `${waited} ms`);
-  assert.match(second.error, /pas répondu à temps/);
+  assert.match(second.error, /autre ouverture de cette porte est encore en cours/);
   release();
   await first;
   assert.equal(net.commands().length, 1, 'only the first one left');
 });
 
-test('a clock that went back never makes the guard last longer', async (t) => {
+test('B1/H1: an opening of door 2 or a close of door 2 never waits behind door 1', async (t) => {
+  const { gladys, net } = await setup(t, {
+    config: { allow_open: true },
+    appTimers: realTimers,
+  });
+  const release = net.hold(A, 'status');
+  const open1 = press(gladys, MACS.a, 'door1_open');
+  await tick();
+  const started = Date.now();
+  const [open2, close2] = await Promise.all([
+    press(gladys, MACS.a, 'door2_open'),
+    (async () => {
+      await tick(5);
+      net.door(A, 1).status = 'close';
+      return press(gladys, MACS.a, 'door2_close');
+    })(),
+  ]);
+  assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms`);
+  assert.equal(open2.success, true, open2.error);
+  assert.equal(close2.success, false, 'door 2 was just opened: guarded');
+  assert.match(close2.error, /vient d'être commandée/);
+  release();
+  await open1;
+});
+
+test('B1/B2/H2: three closes at once on a slow controller: three sent', async (t) => {
+  const { gladys, net, app } = await setup(t, {
+    config: { allow_open: true },
+    appTimers: realTimers,
+  });
+  net.table[A].status.door_num = 3;
+  net.table[A].status.data.door3 = { index: 2, status: 'open', lockup: 0, disabled: 0 };
+  app.data.devices[MACS.a].layout.doors = [0, 1, 2];
+  await app.publishDevices();
+  net.door(A, 0).status = 'open';
+  net.door(A, 1).status = 'open';
+  // Every read answers in 1.2 s, every command in 2 s (one at a time would
+  // take 3 x 3.2 s: only the first close would leave in time).
+  const request = app.client.request;
+  app.client.request = async (options) => {
+    const command = options.body.includes('door_op');
+    await new Promise((resolve) => setTimeout(resolve, command ? 0 : 1200));
+    if (command) {
+      options.beforeSend?.();
+      const answer = request({ ...options, beforeSend: undefined });
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      return answer;
+    }
+    return request(options);
+  };
+  const started = Date.now();
+  const acks = await Promise.all(
+    ['door1_close', 'door2_close', 'door3_close'].map((key) => press(gladys, MACS.a, key)),
+  );
+  assert.ok(Date.now() - started < 4300, `${Date.now() - started} ms`);
+  for (const ack of acks) {
+    assert.equal(ack.success, true, ack.error);
+  }
+  assert.deepEqual(
+    net
+      .commands()
+      .map((c) => JSON.parse(c.body).data.value.door_idx)
+      .sort(),
+    [0, 1, 2],
+  );
+});
+
+test('H7: a wall clock set forward or back never shortens nor lengthens a guard', async (t) => {
   const { gladys, net, now } = await setup(t, { config: { allow_open: true } });
+  net.table[A].moves = false;
   net.door(A, 0).status = 'open';
   assert.equal((await press(gladys, MACS.a, 'door1_close')).success, true);
-  now.advance(-600_000);
-  assert.match((await press(gladys, MACS.a, 'door1_open')).error, /vient d'être commandée/);
+  now.jump(46_000);
+  assert.match((await press(gladys, MACS.a, 'door1_close')).error, /vient d'être commandée/);
+  now.jump(-600_000);
+  net.door(A, 0).status = 'close';
   now.advance(15_000);
   const ack = await press(gladys, MACS.a, 'door1_open');
   assert.equal(ack.success, true, ack.error);
+  assert.equal(net.commands().length, 2);
 });

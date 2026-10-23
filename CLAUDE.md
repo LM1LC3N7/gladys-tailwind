@@ -64,14 +64,19 @@ test/                             node --test, against the SDK's fake Gladys and
   read just now (MAC checked), "open" only from closed, "close" only from
   open, never from an unknown, disabled or locked-out door. BOTH stay off by
   default (`allow_open`), checked on arrival, after the read and in
-  `beforeSend`; one queue per controller, a close cancels the openings of its
-  door not sent yet and is never held by a pause or a refused key (one try).
-  A guard per door is set in `beforeSend` and lifted only by a read sent
-  after the command, 15 s at least. Keep the tests that say so.
+  `beforeSend`; openings queued per door, a close in NO queue (never behind a
+  read or a slow answer, of any door), cancelling the openings of its door
+  not sent yet, never held by a pause or a refused key (one try). A guard per
+  door is set in `beforeSend`, written to `/data` synchronously before the
+  first byte, timed on the monotonic clock, and lifted only by a read sent
+  after the command, 30 s at least after an opening, 15 s after a closing.
+  Keep the tests that say so (B1, H1-H9).
 - **The local control key** is never logged, never in a status, an error or
   `/data` (it travels in the `TOKEN` header: never log headers). A `secret`
   field is kept by Gladys in its database, never shown again: never write
-  that it is encrypted. A refused key is final: never retried automatically.
+  that it is encrypted. A refused key is final: never retried automatically;
+  `/data` keeps 8 bits of its fingerprint, never more (a six-digit key would
+  be found back from a full one).
 - **Reads** are never sooner than the interval (reconnection, saved config,
   scan, action, restart); a late answer of an older generation publishes
   nothing.

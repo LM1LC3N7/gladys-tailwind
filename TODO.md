@@ -23,11 +23,16 @@ up to date at the end of every milestone.
       persisted, manifest, docs en/fr. Tested against fakes and a loopback
       HTTP server only. The store validator was not run by the development
       agent (it cannot): to run from the real terminal.
+- [x] **Review 1 fixes** (2026-10-23): B1/B2 queues per door and closes in
+      no queue, I2 guard 30 s after an opening, I3 8-bit fingerprint, H4
+      guard written synchronously, H7 monotonic clock, H8 key never in the
+      status, H9 bounded rhythm (see the Decisions). The 14 hostile
+      scenarios of the review pass against this version.
 - [ ] **Milestone 2 — real hardware** (testers with a controller): record
       real answers as fixtures, fix what differs. To check first:
   - the door `status` values besides `open` / `close` (an intermediate
-    state?), and how long a door stays read "closed" after an opening
-    command (the guard: 15 s minimum, 45 s maximum);
+    state?), and how long a full travel takes (the guard: 30 s minimum after
+    an opening, 15 s after a closing, 45 s maximum);
   - whether the controller itself refuses `close` on a door its sensor reads
     closed (and `open` on an open one), and what it answers then;
   - the answer to `door_op` (does `OK` come before the relay pulse?), and to
@@ -58,7 +63,8 @@ up to date at the end of every milestone.
 - Structure taken from LM1LC3N7/gladys-opengarage 0.1.3 (approved after two
   reviews, same risk: a garage door on a toggle relay), with its lessons:
   generation checked after every await, guard set in `beforeSend`, queue
-  bound at 3.3 s, clock going back.
+  bound at 3.3 s. Review 1 (B1): opengarage has one door per controller, so
+  its single queue does not carry over; see "Queues" below.
 - External ids: `gladys.externalIds('tailwind', mac)`, `mac` the 12
   lower-case hex digits of `dev_id` (`_3c_e9_e_6d_21_84_` -> `3ce90e6d2184`,
   as gotailwind's `tailwind_device_id_to_mac_address`). ONE Gladys device per
@@ -85,17 +91,37 @@ up to date at the end of every milestone.
   retried. An opening is held by both. A close is still refused while the
   guard of a previous command of its door holds (a second pulse would stop
   or reverse the moving door).
-- Queue: one per controller (the controller is a small device: one command
-  at a time), bound at sendBy - 200 ms; flights, guards and pending openings
-  per door. The LED is never in the door queue (one LED command at a time
-  per controller, refused otherwise), so it never delays a close.
-- Guard (per door, `<mac>-<index>` in `/data`): set in `beforeSend` (before
-  the first byte, saved at once) with its start state, expected state, `at`
-  and a request number (memory only); removed only when the controller
-  surely did nothing (`Fail`, `token fail`, HTTP 4xx, not sent). Any command
-  of that door is refused until a read whose request left AFTER the command
-  shows the expected state at least 15 s after it, or 45 s. One command in
-  flight per door.
+- Queues (review 1, B1/B2, lessons of lots 11-13): openings are queued per
+  DOOR (bound at sendBy - 200 ms, refused with "another opening of this door
+  is still in progress", or "just commanded" if one left). A close is in no
+  queue: it never waits behind the read or the slow answer of any command,
+  of its door or another; three closes at once on a slow controller all
+  leave (test). Two closes of one door: the flight / guard refuse the second
+  at once. An opening the close cancelled before it left never holds it.
+  Flights, guards and pending openings per door. The LED is never in a door
+  queue (one LED command at a time per controller, 2 s apart at least).
+- Guard (per door, `<mac>-<index>` in `/data`): set in `beforeSend` and
+  written to `/data` SYNCHRONOUSLY there (review 1, H4: `saveSync`, its own
+  temporary file; an older async save in progress never overwrites it), with
+  its start state, expected state, `at`/`until` (wall clock, for `/data`),
+  and a request number and `monoAt` (memory only). Ages on a monotonic clock
+  (`performance.now`, H7): a wall clock set forward or back changes nothing;
+  a guard read back after a restart is put on it with the age its `at` gives.
+  Removed only when the controller surely did nothing (`Fail`, `token fail`,
+  HTTP 4xx, not sent). Any command of that door is refused until a read whose
+  request left AFTER the command shows the expected state, at least 30 s
+  after an opening (review 1, I2: the sensor reads "open" as soon as the door
+  leaves closed, a travel lasts up to 30 s) or 15 s after a closing ("close"
+  is only read at the end of travel), or 45 s. A command while the guard is
+  younger than that minimum is refused at once, without a read.
+- Rhythm (review 1, H9): a press of the same kind on the same door within 5 s
+  of one that sent nothing (already there, or refused on its read) gets that
+  answer again ("already there" becomes "answered a moment ago, try again"),
+  without a read: a scene in a loop reads at most once per 5 s per door and
+  kind. Never reused when something was sent (the guard covers that). LED:
+  2 s apart at least.
+- Status (review 1, H8): the invalid entries of the addresses field are only
+  counted, never shown; and the configured key is masked in any status text.
 - Success of a door command = the controller answered `OK`: the door then
   moves for 10-30 s, longer than the 5 s ack; reads follow at 5, 15, 30,
   50 s and the guard covers the travel. Documented. The LED (instant) is
@@ -110,8 +136,12 @@ up to date at the end of every milestone.
   HTTP on the LAN), never in a log, status, error or `/data`. Needed for the
   reads too: without it nothing is read.
 - Refused key (`token fail`, lot 12 lesson: an authentication error that is
-  not clearly transient is final): per address, persisted as an HMAC of the
-  refused key with a random salt of `/data`; that address is not read again
+  not clearly transient is final): per address, persisted as the first 8 bits
+  (2 hex digits) of an HMAC of the refused key with a random salt of `/data`
+  (review 1, I3: a full HMAC of a six-digit key next to its salt gave the key
+  back in 0.3 s; 8 bits leave ~3,900 candidates, tested; a new key colliding
+  with them costs one press on "Check"; a longer fingerprint in an older file
+  is dropped); that address is not read again
   with that key, automatically never; another key is tried once the interval
   has passed; "Check the controllers" reads it once (never sooner than the
   interval) and only a success lifts the refusal. A key that worked on any

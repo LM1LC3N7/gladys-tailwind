@@ -23,19 +23,26 @@ the notes of the version's GitHub Release.
   the opener (a toggle on most openers), so every command is decided on the
   door read just now: "Open" only to a closed door, "Close" only to an open
   one; unknown, disabled or locked out is refused. Both are off by default
-  ("Allow opening and closing the garage doors"); one queue per controller, a
-  close cancels the pending openings of its door and is never held by a
-  pause asked by the controller nor by a refused key (one try).
+  ("Allow opening and closing the garage doors"). Openings of a door go one
+  at a time; a close never waits behind another command (closing three doors
+  at once sends three commands), cancels the pending openings of its door
+  and is never held by a pause asked by the controller nor by a refused key
+  (one try).
 - After a command, another one of that door waits until a read sent after it
-  shows the door where it was sent, at least 15 s and at most 45 s after it.
-  The guard is set and saved before the first byte leaves, so a restart keeps
-  it.
+  shows the door where it was sent: at least 30 s after an opening, 15 s after
+  a closing, 45 s at most. The guard is written to `/data` before the first
+  byte leaves, so a restart keeps it, and a change of the system time never
+  shortens it.
+- The same press within 5 s of one that sent nothing is answered without
+  reading the controller again; the LED changes once every 2 s at most.
 - Commands sent within 3.5 s or refused unsent, "sent, without confirmation"
   when no answer came back.
 - Key refused ("token fail"): final for that controller, never replayed; read
   again only with another key or by "Check the controllers" (never sooner
-  than the interval). The key is never logged nor stored, and a key that works
-  on any controller is never fingerprinted in `/data`.
+  than the interval). The key is never logged, stored nor shown in the status
+  (an entry of the addresses field that is not an address is only counted);
+  `/data` keeps only 8 bits of a salted fingerprint of a refused key, never
+  for a key that works on any controller.
 - Never read sooner than the refresh interval, after a restart included (the
   status then shows the outcome of the last read); HTTP 429 or 5xx: a pause
   of 1 min to 6 h; other failures: 30 s to 5 min.

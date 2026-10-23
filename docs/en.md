@@ -67,12 +67,21 @@ door that moved since it was read can stop or reverse it. So:
   in an unknown state, disabled in the Tailwind app or locked out by the
   controller is refused.
 - After a command, the next one of that door waits until the door is read
-  where it was sent, at least 15 s and at most 45 s later (the sensor reads
-  "open" as soon as the door leaves closed, long before the end of travel).
-  This guard is saved before the request leaves, so a restart keeps it.
-- A **Close** cancels the openings of its door that have not left yet. It is
-  never held by a pause asked by the controller (HTTP 429 or 5xx) nor by a
-  refused key: it gets one try, never retried.
+  where it was sent: at least **30 s after an opening** (the sensor reads
+  "open" as soon as the door leaves closed, long before the end of a travel
+  of up to 30 s), 15 s after a closing ("closed" is only read at the end of
+  travel), 45 s at most. This guard is written to the integration files
+  before the request leaves, so a restart keeps it, and it is timed on a
+  clock that a change of the system time does not move.
+- A **Close** never waits behind another command, of its door or of another
+  door: closing three doors at once sends three commands. It cancels the
+  openings of its door that have not left yet. It is never held by a pause
+  asked by the controller (HTTP 429 or 5xx) nor by a refused key: it gets one
+  try, never retried. Openings of a same door go one at a time.
+- The same button pressed again on the same door within 5 s of a press that
+  sent nothing (door already there, or refused) gets the same answer without
+  reading the controller again: a scene in a loop never floods it. The LED
+  brightness can change once every 2 s at most.
 - A command leaves within 3.5 s of the click or is refused without sending
   anything. If it may have reached the controller without an answer, Gladys
   says "sent, without confirmation" and reads the door again; it is never
@@ -87,8 +96,10 @@ door that moved since it was read can stop or reverse it. So:
   again with that key until you save another key, or press "Check the
   controllers" once the key is fixed (one read, never sooner than the
   interval). The key is never written in the logs nor in the integration
-  files: only a salted fingerprint of a refused key is kept, and removed at
-  the first success.
+  files: only 8 bits of a salted fingerprint of a refused key are kept (the
+  key cannot be found back from them), removed at the first success. An entry
+  of the addresses field that is not an address is never shown in the
+  status, only counted.
 - The night mode, the notifications pushed by the controller and the mDNS
   discovery are not handled yet.
 - Most Tailwind controllers are sold in North America: the integration may

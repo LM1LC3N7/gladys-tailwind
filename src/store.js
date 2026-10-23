@@ -5,22 +5,25 @@
 //     before the first poll, and a created device never loses a feature;
 //   - the pauses asked by a controller (429/5xx), per address;
 //   - the local control keys REFUSED by a controller ("token fail"), per
-//     address: a salted fingerprint only (never the key, never a fingerprint
-//     of a key that works on any controller). A refusal is final: that address
+//     address: 8 bits of a salted fingerprint only (never the key, nothing
+//     a six-digit key could be found back from, and never for a key that
+//     works on any controller). A refusal is final: that address
 //     is not read again with that key until another key is saved or "Check
 //     the controllers" succeeds, so a wrong key is never replayed in a loop;
 //   - the guard of the last command of each door, with the time it left (a
-//     restart never lets a second pulse stop a moving door);
+//     restart never lets a second pulse stop a moving door), written
+//     synchronously before the first byte of the command;
 //   - the time of the last read (written at most once a minute), so a
 //     restart never reads sooner than the interval, and the outcome of the
 //     last read of each address (the status until the first read).
 // -----------------------------------------------------------------------------
 
 import { randomBytes } from 'node:crypto';
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseAddress } from './config.js';
-import { DOOR, LIMITS, TIMINGS } from './constants.js';
+import { DOOR, FINGERPRINT_HEX, LIMITS, TIMINGS } from './constants.js';
 import { mergeLayout } from './tailwind/parse.js';
 
 /** A controller id: its MAC, 12 lower-case hexadecimal digits. */
@@ -99,7 +102,8 @@ export function sanitize(data, now = Date.now()) {
         !isAddress(address) ||
         !isObject(block) ||
         typeof block.fingerprint !== 'string' ||
-        !/^[0-9a-f]{64}$/.test(block.fingerprint)
+        // Exactly the short fingerprint: a longer one is never read back.
+        !new RegExp(`^[0-9a-f]{${FINGERPRINT_HEX}}$`).test(block.fingerprint)
       ) {
         continue;
       }
@@ -164,6 +168,9 @@ export class FileStore {
     this.dir = dir;
     this.path = join(dir, name);
     this.now = now;
+    /** Each save gets a number; `written` is the newest one on disk. */
+    this.version = 0;
+    this.written = 0;
   }
 
   async load() {
@@ -175,10 +182,33 @@ export class FileStore {
   }
 
   async save(data) {
+    // Taken now: a synchronous save made while this one is on its way is
+    // newer, and is never overwritten by it.
+    const version = ++this.version;
+    const text = JSON.stringify(data);
     await mkdir(this.dir, { recursive: true });
     const temporary = `${this.path}.tmp`;
-    await writeFile(temporary, JSON.stringify(data), { mode: 0o600 });
+    await writeFile(temporary, text, { mode: 0o600 });
+    if (version < this.written) {
+      return;
+    }
     await rename(temporary, this.path);
+    this.written = version;
+  }
+
+  /**
+   * The same, synchronously: the guard of a command is on disk before the
+   * first byte of the command is written (an abrupt stop right after the
+   * request left keeps it). Its own temporary file, so a save in progress
+   * never mixes with it.
+   */
+  saveSync(data) {
+    const version = ++this.version;
+    mkdirSync(this.dir, { recursive: true });
+    const temporary = `${this.path}.sync.tmp`;
+    writeFileSync(temporary, JSON.stringify(data), { mode: 0o600 });
+    renameSync(temporary, this.path);
+    this.written = version;
   }
 }
 
@@ -195,6 +225,11 @@ export class MemoryStore {
   }
 
   async save(data) {
+    this.data = structuredClone(data);
+    this.saves += 1;
+  }
+
+  saveSync(data) {
     this.data = structuredClone(data);
     this.saves += 1;
   }

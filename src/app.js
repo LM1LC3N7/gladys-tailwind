@@ -18,7 +18,8 @@
 //   - failures: 30 s, 1, 2, 5 min, never sooner than the interval; HTTP 429
 //     or 5xx: a pause of 1 min to 6 h persisted in /data;
 //   - key refused ("token fail"): final for that address and that key,
-//     persisted (a salted fingerprint, never of a key that works anywhere):
+//     persisted (8 bits of a salted fingerprint: the key cannot be found back
+//     from it; never for a key that works anywhere):
 //     no automatic read again until another key is saved or "Check the
 //     controllers" reads it successfully (never sooner than the interval);
 //   - a read of an older configuration that ends late publishes nothing and
@@ -34,16 +35,24 @@
 //   - BOTH need "Allow opening and closing the garage doors" (allow_open, off
 //     by default), checked on arrival, after the fresh read and right before
 //     the request leaves (beforeSend);
-//   - one queue per controller; a close cancels, on arrival, the openings of
-//     its door not sent yet (queued ones included, their read dropped at
-//     once); a close is never held by a 429/5xx pause nor by a refused key
-//     (one try, never retried), an opening is;
-//   - a guard per door is set in beforeSend (persisted at once, with the time
-//     the command left) and refuses any other command of that door until a
-//     read STARTED after it shows the door where it was sent, at least 15 s
-//     after it, or 45 s; never lifted on an unknown or unchanged state;
-//     removed only when the controller surely did nothing (Fail, token fail,
-//     4xx, not sent);
+//   - openings: one queue per DOOR; a close is in NO queue: it never waits
+//     behind a read or a slow answer of any command (its door's guard and
+//     flight refuse it at once when another pulse would stop the door); it
+//     cancels, on arrival, the openings of its door not sent yet (queued ones
+//     included, their read dropped at once); a close is never held by a
+//     429/5xx pause nor by a refused key (one try, never retried), an
+//     opening is;
+//   - a guard per door is set in beforeSend (written to /data synchronously
+//     before the first byte, with the time the command left) and refuses
+//     any other command of that door until a read STARTED after it shows the
+//     door where it was sent, at least 30 s after an opening (the sensor
+//     reads "open" as soon as the door leaves closed) or 15 s after a
+//     closing, or 45 s; measured on a monotonic clock in memory (a wall
+//     clock set forward never lifts it); never lifted on an unknown or
+//     unchanged state; removed only when the controller surely did nothing
+//     (Fail, token fail, 4xx, not sent);
+//   - a press of the same kind on the same door within 5 s of one that sent
+//     nothing gets the same answer without a new read (a scene in a loop);
 //   - sent within 3.5 s of the click or refused unsent; answered by 4.3 s; a
 //     request that may have reached the controller is never answered "not
 //     sent": "sent, without confirmation", then reads; never retried;
@@ -52,13 +61,23 @@
 //
 // LED brightness (light / brightness, 0-100): not a sensitive command, never
 // queued with the doors; identity read first, then the value, then a read
-// back: success only when the LED is read at the value asked.
+// back: success only when the LED is read at the value asked; one at a time
+// per controller, 2 s apart at least.
 // -----------------------------------------------------------------------------
 
 import { createHmac } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { DEVICE_TRANSPORTS, createLogger } from '@gladysassistant/integration-sdk';
 import { generationKey, normalizeConfig, numberOf } from './config.js';
-import { BUTTON_PUSH, DOOR, EXTERNAL_ID_TYPE, LED, LIMITS, TIMINGS } from './constants.js';
+import {
+  BUTTON_PUSH,
+  DOOR,
+  EXTERNAL_ID_TYPE,
+  FINGERPRINT_HEX,
+  LED,
+  LIMITS,
+  TIMINGS,
+} from './constants.js';
 import { ERRORS, T, join, word } from './i18n.js';
 import { buildDevice, commandOf, featuresOf, valuesOf } from './model.js';
 import { StatePublisher } from './publisher.js';
@@ -101,6 +120,9 @@ export class TailwindApp {
     client = new TailwindClient(),
     store = new FileStore(),
     now = Date.now,
+    // A monotonic clock (ms) for the guards in memory: a wall clock set
+    // forward (NTP, by hand) never shortens a guard.
+    mono = () => performance.now(),
     timers = globalThis,
   }) {
     this.gladys = gladys;
@@ -108,6 +130,7 @@ export class TailwindApp {
     this.client = client;
     this.store = store;
     this.now = now;
+    this.mono = mono;
     this.timers = timers;
     this.config = undefined;
     this.data = undefined;
@@ -139,8 +162,12 @@ export class TailwindApp {
     this.created = new Set();
     /** featureId -> { id, key } of the published devices */
     this.features = new Map();
-    /** controller id -> tail of its door command queue */
+    /** door id -> tail of its queue of openings (a close is in no queue) */
     this.queues = new Map();
+    /** `${door id}:${kind}` -> { at (mono), error? } of the last command that sent nothing */
+    this.recentCommands = new Map();
+    /** controller id -> when (mono) its last LED command started */
+    this.lastLed = new Map();
     /** door id -> tickets of the openings not sent yet */
     this.tickets = new Map();
     /** door id -> the command between its plan and its answer */
@@ -175,6 +202,11 @@ export class TailwindApp {
     const first = !this.data;
     if (first) {
       this.data = await this.store.load().catch(() => emptyData());
+      // A guard kept across a restart goes on the monotonic clock from now,
+      // with the age its wall-clock time gives (never in the future).
+      for (const guard of Object.values(this.data.guards)) {
+        guard.monoAt = this.mono() - Math.max(0, this.now() - guard.at);
+      }
     }
     this.config = normalizeConfig(raw);
     if (first && this.data.lastTry !== undefined) {
@@ -315,9 +347,12 @@ export class TailwindApp {
     }
   }
 
-  /** A salted fingerprint of a key, only ever kept for a key a controller refused. */
+  /**
+   * A short salted fingerprint of a key (8 bits), only ever kept for a key a
+   * controller refused: a six-digit key can never be found back from it.
+   */
   fingerprint(key) {
-    return createHmac('sha256', this.data.salt).update(key).digest('hex');
+    return createHmac('sha256', this.data.salt).update(key).digest('hex').slice(0, FINGERPRINT_HEX);
   }
 
   /** The refusal of the current key at an address, if any (final until another key or a success). */
@@ -450,7 +485,7 @@ export class TailwindApp {
     status.lastTry = this.now();
     this.markTry();
     // When this request left: it can only lift a guard of a command sent before it.
-    const origin = { seq: this.nextSequence(), at: this.now() };
+    const origin = { seq: this.nextSequence(), at: this.now(), mono: this.mono() };
     let data;
     try {
       data = await this.client.status(address, key);
@@ -772,7 +807,8 @@ export class TailwindApp {
     }
     const { invalidAddresses, keyProblem } = this.config;
     if (invalidAddresses.length > 0) {
-      parts.push(T.invalidAddresses(invalidAddresses));
+      // Only their number: a key pasted in the wrong field is never shown.
+      parts.push(T.invalidAddresses(invalidAddresses.length));
     }
     if (keyProblem && typed.length > 0) {
       parts.push(T.key[keyProblem]);
@@ -804,6 +840,13 @@ export class TailwindApp {
       parts.push(T.moved(address, previous, next));
     }
     const message = join(parts);
+    // Last guard: the key never appears in the status, whatever put it there
+    // (an address typed with it as a port, for example).
+    if (this.config.key) {
+      for (const lang of Object.keys(message)) {
+        message[lang] = message[lang].split(this.config.key).join('•••');
+      }
+    }
     const key = JSON.stringify([connected, message]);
     if (key === this.lastStatus) {
       return;
@@ -902,8 +945,8 @@ export class TailwindApp {
     const door = action.door;
     if (action.protective) {
       // The openings of this door still waiting to leave are cancelled on
-      // arrival, before any queue, queued ones included; their read is
-      // dropped at once. Cancelling never sends anything.
+      // arrival, queued ones included; their read is dropped at once.
+      // Cancelling never sends anything.
       for (const pending of this.tickets.get(door) ?? []) {
         if (!pending.sent) {
           pending.cancelled = true;
@@ -915,32 +958,38 @@ export class TailwindApp {
     // one already left for this door (a second pulse would stop or reverse
     // it), or a guard younger than its minimum (no read can lift it yet).
     this.checkJustCommanded(door);
-    if (!action.protective) {
-      if (!this.tickets.has(door)) {
-        this.tickets.set(door, new Set());
-      }
-      this.tickets.get(door).add(ticket);
+    // The same press on the same door a moment ago sent nothing: the same
+    // answer, without reading the controller again (a scene in a loop).
+    this.checkRecent(action);
+    if (action.protective) {
+      // A close is in no queue: it never waits behind the read or the slow
+      // answer of any other command (other doors included). Two closes of
+      // the same door: the flight and the guard refuse the second at once.
+      return this.run(record, action, received, ticket);
     }
-    // One queue per controller: a close waits behind a command in progress
-    // (which it has cancelled if it was an opening of its door that had not
-    // left), never beside it. The wait ends by sendBy - 200 ms: the answer
-    // always comes within 3.5 s.
-    const previous = this.queues.get(record.id) ?? Promise.resolve();
+    if (!this.tickets.has(door)) {
+      this.tickets.set(door, new Set());
+    }
+    this.tickets.get(door).add(ticket);
+    // One queue of openings per DOOR: an opening waits behind another
+    // opening of its door in progress, never beside it, and never delays
+    // another door. The wait ends by sendBy - 200 ms, with its real reason.
+    const previous = this.queues.get(door) ?? Promise.resolve();
     let timer;
     const turn = new Promise((resolve, reject) => {
       previous.then(resolve, resolve);
       timer = this.timers.setTimeout(
         () => {
           const flying = this.flights.get(door);
-          reject(this.refusal(flying?.sent ? ERRORS.justCommanded : ERRORS.tooSlow));
+          reject(this.refusal(flying?.sent ? ERRORS.justCommanded : ERRORS.doorBusy));
         },
         Math.max(0, received + TIMINGS.commandSendBy - 200 - this.now()),
       );
     }).finally(() => this.timers.clearTimeout(timer));
     const run = turn.then(() => this.run(record, action, received, ticket));
-    // The next command waits for this one AND everything before it.
+    // The next opening waits for this one AND everything before it.
     const tail = Promise.allSettled([previous, run]).then(() => {});
-    this.queues.set(record.id, tail);
+    this.queues.set(door, tail);
     try {
       return await run;
     } finally {
@@ -949,11 +998,21 @@ export class TailwindApp {
       // settled too: a command refused by the wait bound never lets a later
       // one run beside an earlier one still running.
       tail.then(() => {
-        if (this.queues.get(record.id) === tail) {
-          this.queues.delete(record.id);
+        if (this.queues.get(door) === tail) {
+          this.queues.delete(door);
         }
       });
     }
+  }
+
+  /** The age of a guard (ms), on the monotonic clock. */
+  guardAge(guard) {
+    return this.mono() - guard.monoAt;
+  }
+
+  /** How long the expected state must wait before it lifts a guard. */
+  guardMin(guard) {
+    return guard.expect === DOOR.OPEN ? TIMINGS.doorGuardMinOpen : TIMINGS.doorGuardMinClose;
   }
 
   /** Refuses at once a command while another one of the door has left or a young guard holds. */
@@ -961,10 +1020,38 @@ export class TailwindApp {
     if (this.flights.get(door)?.sent) {
       throw this.refusal(ERRORS.justCommanded);
     }
-    const guard = this.clampGuard(this.data.guards[door]);
-    if (guard && this.now() < guard.until && this.now() - guard.at < TIMINGS.doorGuardMin) {
+    const guard = this.data.guards[door];
+    if (guard && this.guardAge(guard) < this.guardMin(guard)) {
       throw this.refusal(ERRORS.justCommanded);
     }
+  }
+
+  recentKey(action) {
+    return `${action.door}:${action.kind}`;
+  }
+
+  /** The same press, on the same door, within 5 s of one that sent nothing: its answer again. */
+  checkRecent(action) {
+    const recent = this.recentCommands.get(this.recentKey(action));
+    if (
+      !recent ||
+      recent.generation !== this.generation ||
+      this.mono() - recent.at >= TIMINGS.commandReuse
+    ) {
+      return;
+    }
+    const error = new Error(recent.message ?? word(ERRORS.tooSoon, this.config.language));
+    error.refusal = true;
+    throw error;
+  }
+
+  /** Remembers a command that sent nothing (already there, or refused on its read). */
+  rememberRecent(action, message) {
+    this.recentCommands.set(this.recentKey(action), {
+      at: this.mono(),
+      generation: this.generation,
+      message,
+    });
   }
 
   /** The permission of a command, read now from the current configuration. */
@@ -1034,34 +1121,22 @@ export class TailwindApp {
   }
 
   /**
-   * A clock that went back (a manual change, NTP): the guard is brought back
-   * to min(at, now) and at most 45 s from now, as `sanitize` does, so a
-   * refusal never lasts longer than planned.
-   */
-  clampGuard(guard) {
-    if (guard && guard.at > this.now()) {
-      guard.at = this.now();
-      guard.until = Math.min(guard.until, this.now() + TIMINGS.doorGuard);
-      this.persist();
-    }
-    return guard;
-  }
-
-  /**
    * Whether a read lifts the guard: it shows the door where the command sent
    * it, it LEFT after the command (an answer generated before it says
-   * nothing of it), and the door had the time to finish its travel (the
-   * sensor reads "open" as soon as the door leaves closed). The guard also
-   * ends 45 s after the command.
+   * nothing of it), and the door had the time to finish its travel: 30 s
+   * after an opening (the sensor reads "open" as soon as the door leaves
+   * closed), 15 s after a closing. The guard also ends 45 s after the
+   * command. Ages on the monotonic clock: a wall clock set forward or back
+   * changes nothing.
    */
   guardLifted(guard, door, origin) {
-    this.clampGuard(guard);
-    if (this.now() >= guard.until) {
+    const age = this.guardAge(guard);
+    if (age >= TIMINGS.doorGuard) {
       return true;
     }
     // In memory, the request numbers; after a restart (no number), the times.
-    const after = guard.seq === undefined ? origin.at > guard.at : origin.seq > guard.seq;
-    return after && door?.state === guard.expect && this.now() - guard.at >= TIMINGS.doorGuardMin;
+    const after = guard.seq === undefined ? origin.mono > guard.monoAt : origin.seq > guard.seq;
+    return after && door?.state === guard.expect && age >= this.guardMin(guard);
   }
 
   /** Before a command: refused while the guard of the previous one of the door holds. */
@@ -1093,18 +1168,27 @@ export class TailwindApp {
 
   /**
    * The guard of a command, set right before it leaves (beforeSend) and
-   * saved at once: a restart while the command is out keeps it.
+   * written to /data SYNCHRONOUSLY, before the first byte: an abrupt stop
+   * right after the request left keeps it. `at` / `until` (wall clock) are
+   * for /data and a restart; `monoAt` and `seq` are for this process only.
    */
   guardDoor(door, plan) {
     const guard = {
       from: plan.from,
       expect: plan.expect,
       at: this.now(),
-      seq: this.nextSequence(),
       until: this.now() + TIMINGS.doorGuard,
+      seq: this.nextSequence(),
+      monoAt: this.mono(),
     };
     this.data.guards[door] = guard;
-    this.save();
+    try {
+      this.store.saveSync(this.data);
+    } catch {
+      // The guard still holds in memory; the regular save tries again.
+      this.logger.warn('Could not write the guard to /data before the command');
+      this.save();
+    }
     return guard;
   }
 
@@ -1134,7 +1218,7 @@ export class TailwindApp {
    */
   async commandRead(record, address, key, { ticket, generation, left }) {
     let data;
-    const origin = { seq: this.nextSequence(), at: this.now() };
+    const origin = { seq: this.nextSequence(), at: this.now(), mono: this.mono() };
     try {
       if (left() <= 0) throw this.refusal(ERRORS.tooSlow);
       data = await this.client.status(address, key, {
@@ -1213,13 +1297,24 @@ export class TailwindApp {
     check();
     // One command at a time per door: a second pulse would stop or reverse
     // it, and the state just read does not show a command still in flight.
+    // An opening this close cancelled before it left never sends (its
+    // beforeSend refuses a cancelled ticket): it does not hold the close.
     const flying = this.flights.get(action.door);
-    if (flying && flying !== ticket) {
+    if (flying && flying !== ticket && !(flying.cancelled && !flying.sent)) {
       throw this.refusal(ERRORS.justCommanded);
     }
-    const plan = action.plan(reading, origin);
+    let plan;
+    try {
+      plan = action.plan(reading, origin);
+    } catch (err) {
+      // Refused on what was read: the same press within 5 s gets this answer
+      // again without a new read.
+      if (err.refusal) this.rememberRecent(action, err.message);
+      throw err;
+    }
     if (plan.unchanged) {
       // Already there: nothing sent.
+      this.rememberRecent(action, undefined);
       return;
     }
     this.flights.set(action.door, ticket);
@@ -1293,6 +1388,13 @@ export class TailwindApp {
     if (this.ledBusy.has(record.id)) {
       throw this.refusal(ERRORS.ledBusy);
     }
+    // A slider dragged or a scene in a loop: at most one LED command (three
+    // requests) every 2 s per controller.
+    const last = this.lastLed.get(record.id);
+    if (last !== undefined && this.mono() - last < TIMINGS.ledSpacing) {
+      throw this.refusal(ERRORS.ledTooSoon);
+    }
+    this.lastLed.set(record.id, this.mono());
     this.ledBusy.add(record.id);
     try {
       return await this.runLed(record, brightness, received);

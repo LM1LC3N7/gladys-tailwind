@@ -44,10 +44,10 @@ export const T = {
     'Waiting for the first read of the controllers.',
     'En attente de la première lecture des contrôleurs.',
   ),
-  invalidAddresses: (list) =>
+  invalidAddresses: (count) =>
     both(
-      `Ignored, not an address: ${list.join(', ')}.`,
-      `Ignoré, ce n'est pas une adresse : ${list.join(', ')}.`,
+      `${count} entry(ies) of the addresses field ignored: not an IP address or a host name (with an optional port).`,
+      `${count} entrée(s) du champ des adresses ignorée(s) : pas une adresse IP ni un nom d'hôte (avec un port facultatif).`,
     ),
   key: {
     missing: both(
@@ -192,6 +192,18 @@ export const ERRORS = {
   ledBusy: both(
     'A brightness change of this LED is already in progress: nothing sent.',
     "Un changement de luminosité de ce voyant est déjà en cours : rien n'a été envoyé.",
+  ),
+  ledTooSoon: both(
+    'The LED brightness was changed less than 2 s ago: nothing sent. Try again in a moment.',
+    "La luminosité du voyant a été changée il y a moins de 2 s : rien n'a été envoyé. Réessayez dans un instant.",
+  ),
+  doorBusy: both(
+    'Another opening of this door is still in progress: nothing sent.',
+    "Une autre ouverture de cette porte est encore en cours : rien n'a été envoyé.",
+  ),
+  tooSoon: both(
+    'The same command was answered a moment ago (the door was already there): nothing sent, nothing read again. Try again in a few seconds.',
+    "La même commande a été traitée il y a un instant (la porte y était déjà) : rien n'a été envoyé ni relu. Réessayez dans quelques secondes.",
   ),
   notSent: (reason) => both(`Command not sent (${reason}).`, `Commande non envoyée (${reason}).`),
   refused: both(
