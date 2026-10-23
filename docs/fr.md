@@ -84,10 +84,14 @@ bougé depuis sa lecture peut l'arrêter ou l'inverser. Donc :
   retenu par une pause demandée par le contrôleur (HTTP 429 ou 5xx) ni par une
   clé refusée : il a un essai, jamais renouvelé. Les ouvertures d'une même
   porte passent une à une.
-- Le même bouton pressé à nouveau sur la même porte dans les 5 s d'un appui
-  qui n'a rien envoyé (porte déjà dans cet état, ou refus) reçoit la même
-  réponse sans relire le contrôleur : une scène en boucle ne le submerge
-  jamais. La luminosité du voyant change au plus une fois toutes les 2 s.
+- **Ouvrir** pressé à nouveau sur la même porte dans les 5 s d'une ouverture
+  qui n'a rien envoyé (porte lue ouverte, ou refus) est refusé sans relire le
+  contrôleur (« réessayez dans quelques secondes ») : une scène en boucle ne
+  le submerge jamais. **Fermer** n'est jamais retenu ainsi : chaque fermeture
+  relit la porte et décide sur ce qu'elle lit. La luminosité du voyant change
+  au plus une fois toutes les 2 s.
+- Si l'intégration ne peut pas écrire dans ses fichiers, une commande part
+  quand même (sa garde tient en mémoire) et l'état le signale.
 - Une commande part dans les 3,5 s du clic ou est refusée sans rien envoyer.
   Si elle a pu atteindre le contrôleur sans réponse, Gladys indique
   « envoyée, sans confirmation » et relit la porte ; elle n'est jamais

@@ -78,10 +78,14 @@ door that moved since it was read can stop or reverse it. So:
   openings of its door that have not left yet. It is never held by a pause
   asked by the controller (HTTP 429 or 5xx) nor by a refused key: it gets one
   try, never retried. Openings of a same door go one at a time.
-- The same button pressed again on the same door within 5 s of a press that
-  sent nothing (door already there, or refused) gets the same answer without
-  reading the controller again: a scene in a loop never floods it. The LED
-  brightness can change once every 2 s at most.
+- **Open** pressed again on the same door within 5 s of an opening that sent
+  nothing (door read open, or refused) is refused without reading the
+  controller again ("try again in a few seconds"): a scene in a loop never
+  floods it. **Close** is never held this way: every close reads the door
+  again and decides on what it reads. The LED brightness can change once
+  every 2 s at most.
+- If the integration cannot write to its files, a command still leaves (its
+  guard holds in memory) and the status says so.
 - A command leaves within 3.5 s of the click or is refused without sending
   anything. If it may have reached the controller without an answer, Gladys
   says "sent, without confirmation" and reads the door again; it is never

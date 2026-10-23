@@ -28,6 +28,12 @@ up to date at the end of every milestone.
       guard written synchronously, H7 monotonic clock, H8 key never in the
       status, H9 bounded rhythm (see the Decisions). The 14 hostile
       scenarios of the review pass against this version.
+- [x] **Approval 1 fixes** (2026-10-23): the 5 s rule never applies to a
+      close (R1-R4 tests: every close reads again); exact reason of a held
+      opening; deadline checked again after the synchronous guard write
+      (guard removed, nothing sent); `persist()` after it; key masked in the
+      status from 4 characters; a guard kept in memory only is said in the
+      status.
 - [ ] **Milestone 2 — real hardware** (testers with a controller): record
       real answers as fixtures, fix what differs. To check first:
   - the door `status` values besides `open` / `close` (an intermediate
@@ -114,14 +120,24 @@ up to date at the end of every milestone.
   leaves closed, a travel lasts up to 30 s) or 15 s after a closing ("close"
   is only read at the end of travel), or 45 s. A command while the guard is
   younger than that minimum is refused at once, without a read.
-- Rhythm (review 1, H9): a press of the same kind on the same door within 5 s
-  of one that sent nothing (already there, or refused on its read) gets that
-  answer again ("already there" becomes "answered a moment ago, try again"),
-  without a read: a scene in a loop reads at most once per 5 s per door and
-  kind. Never reused when something was sent (the guard covers that). LED:
-  2 s apart at least.
+- Rhythm (review 1, H9; approval 1): an OPENING pressed again on the same door
+  within 5 s of one that sent nothing (read open, or refused on its read) is
+  refused without a read, saying "refused a moment ago (<first reason>)" or
+  "the door was read open then, try again", never that the door is still
+  there. A CLOSE is never held by this rule (R1-R4: the door may have moved,
+  a guard may have ended; lot 13: in doubt the protective command leaves):
+  every close reads again and decides on what it reads, so a scene closing in
+  a loop may read every second (accepted: a lost close is worse). Sharing a
+  read already in progress for its door was allowed by the review but not
+  needed. LED: 2 s apart at least.
+- Guard write: the deadline is checked again after the synchronous write
+  (a slow SD card): past it, the guard is removed and nothing is sent.
+  `persist()` follows every synchronous write. /data not writable: the
+  command still leaves (the guard holds in memory), a warning is logged and
+  the status says it until a save works (approved at approval 1).
 - Status (review 1, H8): the invalid entries of the addresses field are only
-  counted, never shown; and the configured key is masked in any status text.
+  counted, never shown; and the configured key is masked in any status text
+  when it has 4 characters or more (a shorter one would spoil the numbers).
 - Success of a door command = the controller answered `OK`: the door then
   moves for 10-30 s, longer than the 5 s ack; reads follow at 5, 15, 30,
   50 s and the guard covers the travel. Documented. The LED (instant) is

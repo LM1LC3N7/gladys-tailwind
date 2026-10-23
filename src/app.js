@@ -51,8 +51,9 @@
 //     clock set forward never lifts it); never lifted on an unknown or
 //     unchanged state; removed only when the controller surely did nothing
 //     (Fail, token fail, 4xx, not sent);
-//   - a press of the same kind on the same door within 5 s of one that sent
-//     nothing gets the same answer without a new read (a scene in a loop);
+//   - an OPENING pressed again on the same door within 5 s of one that sent
+//     nothing is refused without a new read (a scene in a loop); a close
+//     always reads again and decides on what it reads;
 //   - sent within 3.5 s of the click or refused unsent; answered by 4.3 s; a
 //     request that may have reached the controller is never answered "not
 //     sent": "sent, without confirmation", then reads; never retried;
@@ -166,6 +167,8 @@ export class TailwindApp {
     this.queues = new Map();
     /** `${door id}:${kind}` -> { at (mono), error? } of the last command that sent nothing */
     this.recentCommands = new Map();
+    /** A guard could not be written to /data: said in the status until a save works. */
+    this.guardUnsaved = false;
     /** controller id -> when (mono) its last LED command started */
     this.lastLed = new Map();
     /** door id -> tickets of the openings not sent yet */
@@ -293,6 +296,13 @@ export class TailwindApp {
   save() {
     this.saving = this.saving
       .then(() => this.store.save(this.data))
+      .then(() => {
+        // A guard kept only in memory is now on disk too.
+        if (this.guardUnsaved) {
+          this.guardUnsaved = false;
+          this.updateStatus();
+        }
+      })
       .catch(() => this.logger.warn('Could not save /data'));
     return this.saving;
   }
@@ -839,10 +849,14 @@ export class TailwindApp {
     for (const [address, [previous, next]] of this.moved) {
       parts.push(T.moved(address, previous, next));
     }
+    if (this.guardUnsaved) {
+      parts.push(T.guardUnsaved);
+    }
     const message = join(parts);
     // Last guard: the key never appears in the status, whatever put it there
-    // (an address typed with it as a port, for example).
-    if (this.config.key) {
+    // (an address typed with it as a port, for example). From 4 characters:
+    // a very short key would only spoil the numbers of the status.
+    if (this.config.key && this.config.key.length >= 4) {
       for (const lang of Object.keys(message)) {
         message[lang] = message[lang].split(this.config.key).join('•••');
       }
@@ -958,9 +972,13 @@ export class TailwindApp {
     // one already left for this door (a second pulse would stop or reverse
     // it), or a guard younger than its minimum (no read can lift it yet).
     this.checkJustCommanded(door);
-    // The same press on the same door a moment ago sent nothing: the same
-    // answer, without reading the controller again (a scene in a loop).
-    this.checkRecent(action);
+    // An OPENING pressed again on the same door a moment after one that sent
+    // nothing: refused without reading the controller again (a scene in a
+    // loop). Never a close: every close reads and decides on what it reads
+    // (the door may have moved, a guard may have ended).
+    if (!action.protective) {
+      this.checkRecent(action);
+    }
     if (action.protective) {
       // A close is in no queue: it never waits behind the read or the slow
       // answer of any other command (other doors included). Two closes of
@@ -1030,7 +1048,11 @@ export class TailwindApp {
     return `${action.door}:${action.kind}`;
   }
 
-  /** The same press, on the same door, within 5 s of one that sent nothing: its answer again. */
+  /**
+   * An opening pressed again on the same door within 5 s of one that sent
+   * nothing: refused, without a read, saying exactly why the first one sent
+   * nothing (never claiming the door is still there: it may have moved).
+   */
   checkRecent(action) {
     const recent = this.recentCommands.get(this.recentKey(action));
     if (
@@ -1040,13 +1062,20 @@ export class TailwindApp {
     ) {
       return;
     }
-    const error = new Error(recent.message ?? word(ERRORS.tooSoon, this.config.language));
+    const text =
+      recent.message === undefined
+        ? word(ERRORS.tooSoon, this.config.language)
+        : word(ERRORS.tooSoonRefused(recent.message), this.config.language);
+    const error = new Error(text);
     error.refusal = true;
     throw error;
   }
 
-  /** Remembers a command that sent nothing (already there, or refused on its read). */
+  /** Remembers an opening that sent nothing (already there, or refused on its read). */
   rememberRecent(action, message) {
+    if (action.protective) {
+      return;
+    }
     this.recentCommands.set(this.recentKey(action), {
       at: this.mono(),
       generation: this.generation,
@@ -1184,9 +1213,15 @@ export class TailwindApp {
     this.data.guards[door] = guard;
     try {
       this.store.saveSync(this.data);
+      // A regular save follows: whatever an older save in progress does, the
+      // file ends with the guard.
+      this.persist();
     } catch {
-      // The guard still holds in memory; the regular save tries again.
+      // The guard still holds in memory (the command still leaves: refusing
+      // would hold the closes too); said in the status until a save works.
       this.logger.warn('Could not write the guard to /data before the command');
+      this.guardUnsaved = true;
+      this.updateStatus();
       this.save();
     }
     return guard;
@@ -1330,12 +1365,17 @@ export class TailwindApp {
         // is set (and saved) before the first byte.
         beforeSend: () => {
           check();
-          ticket.sent = true;
           guard = this.guardDoor(action.door, plan);
+          // The synchronous write may have been slow (an SD card): past the
+          // deadline, nothing leaves (nothing is on the socket yet).
+          if (this.now() > sendBy) throw this.refusal(ERRORS.tooSlow);
+          ticket.sent = true;
         },
       });
     } catch (err) {
       if (err.beforeSend) {
+        // Refused before the first byte: the controller did nothing.
+        this.unguardDoor(action.door, guard);
         throw err;
       }
       const reason = reasonOf(err);

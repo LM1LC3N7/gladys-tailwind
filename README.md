@@ -41,8 +41,8 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (TailwindApp)
   `/data` synchronously before the first byte and timed on a monotonic clock,
   refuses another one until a read sent after it shows the door where it was
   sent (30 s at least after an opening, 15 s after a closing, 45 s at most).
-  The same press within 5 s of one that sent nothing is answered without a
-  new read. See [docs/en.md](docs/en.md#command-safety).
+  An opening pressed again within 5 s of one that sent nothing is refused
+  without a new read; a close always reads again. See [docs/en.md](docs/en.md#command-safety).
 - **Status LED**: `status_led`, confirmed only by the value read back; one
   command every 2 s at most.
 - **The key** is never logged, nor put in a status, an error or `/data`. A

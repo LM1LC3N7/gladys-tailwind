@@ -33,8 +33,10 @@ the notes of the version's GitHub Release.
   a closing, 45 s at most. The guard is written to `/data` before the first
   byte leaves, so a restart keeps it, and a change of the system time never
   shortens it.
-- The same press within 5 s of one that sent nothing is answered without
-  reading the controller again; the LED changes once every 2 s at most.
+- An opening pressed again within 5 s of one that sent nothing is refused
+  without reading the controller again; a close always reads the door again.
+  The LED changes once every 2 s at most. A guard that could not be written
+  to `/data` is said in the status.
 - Commands sent within 3.5 s or refused unsent, "sent, without confirmation"
   when no answer came back.
 - Key refused ("token fail"): final for that controller, never replayed; read

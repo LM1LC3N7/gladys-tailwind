@@ -323,16 +323,101 @@ test('close: only to a door read open; already closed sends nothing', async (t) 
   const closed = await press(gladys, MACS.a, 'door1_close');
   assert.equal(closed.success, true, closed.error);
   assert.equal(net.commands().length, 0);
+  // R1: opened with the remote, a close 2 s later reads again and is sent.
   net.door(A, 0).status = 'open';
-  // The same press within 5 s: answered without a read, nothing sent.
-  const reads = net.reads().length;
-  assert.match((await press(gladys, MACS.a, 'door1_close')).error, /il y a un instant/);
-  assert.equal(net.reads().length, reads);
-  now.advance(5000);
+  now.advance(2000);
   const ack = await press(gladys, MACS.a, 'door1_close');
   assert.equal(ack.success, true, ack.error);
   assert.equal(net.commands().length, 1);
   assert.equal(net.door(A, 0).status, 'close');
+});
+
+test('R2: a close refused by the guard at 31 s, door read open at 33 s: sent', async (t) => {
+  const { gladys, net, now } = await setup(t, { config: { allow_open: true } });
+  net.table[A].moves = false;
+  assert.equal((await press(gladys, MACS.a, 'door1_open')).success, true);
+  now.advance(31_000);
+  assert.equal((await press(gladys, MACS.a, 'door1_close')).success, false);
+  net.door(A, 0).status = 'open';
+  now.advance(2000);
+  const close = await press(gladys, MACS.a, 'door1_close');
+  assert.equal(close.success, true, close.error);
+  assert.equal(net.commands().length, 2);
+});
+
+test('R3: a close refused on an unknown state, known open 1 s later: sent', async (t) => {
+  const { gladys, net, now } = await setup(t, { config: { allow_open: true } });
+  net.door(A, 0).status = 'stopped';
+  assert.equal((await press(gladys, MACS.a, 'door1_close')).success, false);
+  net.door(A, 0).status = 'open';
+  now.advance(1000);
+  const close = await press(gladys, MACS.a, 'door1_close');
+  assert.equal(close.success, true, close.error);
+  assert.equal(net.commands().length, 1);
+});
+
+test('R4: a close refused at 44 s by the guard, at 46 s (guard over, door open): sent', async (t) => {
+  const { gladys, net, now } = await setup(t, { config: { allow_open: true } });
+  net.table[A].moves = false;
+  net.door(A, 0).status = 'open';
+  assert.equal((await press(gladys, MACS.a, 'door1_close')).success, true);
+  now.advance(44_000);
+  assert.equal((await press(gladys, MACS.a, 'door1_close')).success, false);
+  now.advance(2000);
+  const close = await press(gladys, MACS.a, 'door1_close');
+  assert.equal(close.success, true, close.error);
+  assert.equal(net.commands().length, 2);
+});
+
+test('the 5 s rule holds openings only, with the exact reason of the first refusal', async (t) => {
+  const { gladys, net, now } = await setup(t, { config: { allow_open: true } });
+  net.door(A, 0).status = 'stopped';
+  assert.match((await press(gladys, MACS.a, 'door1_open')).error, /n'est pas lue fermée/);
+  const reads = net.reads().length;
+  const again = await press(gladys, MACS.a, 'door1_open');
+  assert.match(again.error, /refusée il y a un instant \(La porte n'est pas lue fermée/);
+  assert.doesNotMatch(again.error, /y était déjà|lue ouverte/);
+  assert.equal(net.reads().length, reads, 'nothing read');
+  // Already open: "read open then", never "it is there".
+  now.advance(5000);
+  net.door(A, 0).status = 'open';
+  assert.equal((await press(gladys, MACS.a, 'door1_open')).success, true);
+  assert.match((await press(gladys, MACS.a, 'door1_open')).error, /était alors lue ouverte/);
+  now.advance(5000);
+  net.door(A, 0).status = 'close';
+  assert.equal((await press(gladys, MACS.a, 'door1_open')).success, true);
+  assert.equal(net.commands().length, 1);
+});
+
+test('a guard written past the deadline (slow /data): refused, nothing sent, no guard', async (t) => {
+  const { gladys, net, app, now } = await setup(t, { config: { allow_open: true } });
+  const saveSync = app.store.saveSync.bind(app.store);
+  app.store.saveSync = (data) => {
+    now.advance(4000);
+    saveSync(data);
+  };
+  const ack = await press(gladys, MACS.a, 'door1_open');
+  assert.match(ack.error, /rien n'a été envoyé/);
+  assert.equal(net.commands().length, 0);
+  assert.equal(guardOf(app, MACS.a), undefined);
+});
+
+test('/data not writable: the command leaves, the guard holds in memory, said in the status', async (t) => {
+  const { gladys, net, app, logs, now } = await setup(t, { config: { allow_open: true } });
+  net.table[A].moves = false;
+  app.store.saveSync = () => {
+    throw new Error('read-only');
+  };
+  app.store.save = async () => {
+    throw new Error('read-only');
+  };
+  assert.equal((await press(gladys, MACS.a, 'door1_open')).success, true);
+  await app.saving;
+  assert.ok(logs.some((l) => l.includes('Could not write the guard')));
+  assert.match(gladys.fake.connectionStatus.message.fr, /qu'en mémoire/);
+  now.advance(10_000);
+  assert.equal((await press(gladys, MACS.a, 'door1_open')).success, false);
+  assert.equal(net.commands().length, 1);
 });
 
 test('an unknown, disabled or locked out door is never commanded', async (t) => {
@@ -835,15 +920,30 @@ test('LED: no permission needed, confirmed only by the value read back', async (
   assert.equal(net.leds().length, 2);
 });
 
-test('H9: a scene pressing a button every second reads at most once per 5 s', async (t) => {
+test('H9: a scene pressing Open every second reads at most once per 5 s; Close always reads', async (t) => {
   const { gladys, net, now } = await setup(t, { config: { allow_open: true } });
-  const before = net.reads().length;
+  net.door(A, 0).status = 'open';
+  let before = net.reads().length;
   for (let i = 0; i < 60; i += 1) {
     now.advance(1000);
-    await press(gladys, MACS.a, 'door1_close');
+    await press(gladys, MACS.a, 'door1_open');
   }
   assert.ok(net.reads().length - before <= 12, `${net.reads().length - before} reads`);
+  // A close is never answered from an older read (the door may have moved).
+  net.door(A, 1).status = 'close';
+  before = net.reads().length;
+  for (let i = 0; i < 5; i += 1) {
+    now.advance(1000);
+    await press(gladys, MACS.a, 'door2_close');
+  }
+  assert.equal(net.reads().length - before, 5);
   assert.equal(net.commands().length, 0);
+});
+
+test('a short key is not masked in the status (it would spoil its numbers)', async (t) => {
+  // The fake controllers refuse it: the addresses are said, digits intact.
+  const { gladys } = await setup(t, { config: { local_key: '1' } });
+  assert.match(gladys.fake.connectionStatus.message.en, /refused by 192\.168\.1\.60/);
 });
 
 test('H8: a key pasted in the addresses field never shows in the status', async (t) => {

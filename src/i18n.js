@@ -84,6 +84,10 @@ export const T = {
       `The same controller (${id}) answers at ${list.join(' and ')}: only the first one is used.`,
       `Le même contrôleur (${id}) répond à ${list.join(' et ')} : seule la première adresse sert.`,
     ),
+  guardUnsaved: both(
+    'Could not write to /data: the guard of the last door command is kept in memory only (a restart within 45 s would lose it).',
+    "Écriture impossible dans /data : la garde de la dernière commande de porte n'est gardée qu'en mémoire (un redémarrage dans les 45 s la perdrait).",
+  ),
   moved: (address, previous, next) =>
     both(
       `${address}: ${previous} was there, ${next} answers now. Give each controller a fixed address in your router.`,
@@ -202,9 +206,14 @@ export const ERRORS = {
     "Une autre ouverture de cette porte est encore en cours : rien n'a été envoyé.",
   ),
   tooSoon: both(
-    'The same command was answered a moment ago (the door was already there): nothing sent, nothing read again. Try again in a few seconds.',
-    "La même commande a été traitée il y a un instant (la porte y était déjà) : rien n'a été envoyé ni relu. Réessayez dans quelques secondes.",
+    'The same opening was answered a moment ago (the door was read open then): nothing sent, nothing read again. Try again in a few seconds.',
+    "La même ouverture a été traitée il y a un instant (la porte était alors lue ouverte) : rien n'a été envoyé ni relu. Réessayez dans quelques secondes.",
   ),
+  tooSoonRefused: (reason) =>
+    both(
+      `The same opening was refused a moment ago (${reason}): nothing sent, nothing read again. Try again in a few seconds.`,
+      `La même ouverture a été refusée il y a un instant (${reason}) : rien n'a été envoyé ni relu. Réessayez dans quelques secondes.`,
+    ),
   notSent: (reason) => both(`Command not sent (${reason}).`, `Commande non envoyée (${reason}).`),
   refused: both(
     'The controller refused the command ("Fail"): the door did not move.',
