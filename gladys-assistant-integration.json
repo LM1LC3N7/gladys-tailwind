@@ -1,177 +1,162 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "Tailwind",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "Tailwind garage door controllers, locally: door state, open, close, status LED.",
+    "fr": "Contrôleurs de porte de garage Tailwind, en local : état, ouvrir, fermer, voyant."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-tailwind:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-tailwind/main/cover.png",
+  "categories": ["security"],
+  "transports": ["local"],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": {
+        "en": "Your Tailwind controllers, on your local network",
+        "fr": "Vos contrôleurs Tailwind, sur votre réseau local"
+      },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "The state of each garage door of your Tailwind controllers (iQ3, Light), Open and Close buttons, and the brightness of the status LED, through the local API of the controller, without the Tailwind cloud. Give each controller a fixed IP address in your router, type the addresses and your local control key below, then add them from the Discovery tab. Never tested with a real device. Unofficial integration, not affiliated with Tailwind.",
+        "fr": "L'état de chaque porte de garage de vos contrôleurs Tailwind (iQ3, Light), des boutons Ouvrir et Fermer, et la luminosité du voyant, par l'API locale du contrôleur, sans le cloud Tailwind. Donnez à chaque contrôleur une adresse IP fixe dans votre box, saisissez les adresses et votre clé de contrôle local ci-dessous, puis ajoutez-les depuis l'onglet Découverte. Jamais testé avec un vrai appareil. Intégration non officielle, sans lien avec Tailwind."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://github.com/LM1LC3N7/gladys-tailwind/blob/main/docs/fr.md",
+          "label": {
+            "en": "Guide (French)",
+            "fr": "Guide (français)"
+          }
+        },
+        {
+          "url": "https://github.com/LM1LC3N7/gladys-tailwind/blob/main/docs/en.md",
+          "label": {
+            "en": "Guide (English)",
+            "fr": "Guide (anglais)"
+          }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
-      "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
+      "key": "addresses",
+      "type": "string",
+      "label": {
+        "en": "IP addresses of the controllers",
+        "fr": "Adresses IP des contrôleurs"
       },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
-      "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
+      "description": {
+        "en": "Separated by commas, for example 192.168.1.60, 192.168.1.61 (add :port if it is not 80).",
+        "fr": "Séparées par des virgules, par exemple 192.168.1.60, 192.168.1.61 (ajoutez :port s'il n'est pas 80)."
+      },
+      "placeholder": {
+        "en": "192.168.1.60",
+        "fr": "192.168.1.60"
+      },
+      "required": false,
+      "default": ""
     },
     {
-      "key": "longitude",
-      "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
-      "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
+      "key": "local_key",
+      "type": "secret",
+      "label": {
+        "en": "Local control key",
+        "fr": "Clé de contrôle local"
       },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
-      "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
+      "description": {
+        "en": "The six-digit \"Local Control Key\" shown in the Tailwind web app (web.gotailwind.com, signed in with your Tailwind account). The same for every controller of the account. Needed for everything: a controller answers nothing without it. Kept by Gladys in its database, never shown again, sent only to your Tailwind controllers (in clear on your local network: their local API has no https).",
+        "fr": "La « Local Control Key » (six caractères, par exemple 123456) affichée dans l'application web Tailwind (web.gotailwind.com, connecté avec votre compte Tailwind). La même pour tous les contrôleurs du compte. Nécessaire pour tout : un contrôleur ne répond rien sans elle. Ce champ est gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement à vos contrôleurs Tailwind (en clair sur votre réseau local : leur API locale n'a pas de https)."
+      },
+      "required": false
     },
     {
-      "key": "unit",
+      "key": "poll_interval",
+      "type": "number",
+      "label": {
+        "en": "Refresh interval (s)",
+        "fr": "Intervalle de rafraîchissement (s)"
+      },
+      "description": {
+        "en": "How often each controller is read, in seconds. Never sooner, even after a restart.",
+        "fr": "Fréquence de lecture de chaque contrôleur, en secondes. Jamais plus souvent, même après un redémarrage."
+      },
+      "required": false,
+      "default": 10,
+      "min": 5,
+      "max": 300
+    },
+    {
+      "key": "door_section",
+      "type": "section",
+      "label": {
+        "en": "Opening and closing",
+        "fr": "Ouverture et fermeture"
+      },
+      "description": {
+        "en": "Each door has two buttons, never a switch. The controller pulses the wall-button input of the opener, a toggle on most openers: a pulse can stop or reverse a door that moved since it was read. Both buttons are therefore refused until you allow them below. Gladys reads the door just before each command: \"Open\" only to a door read closed, \"Close\" only to a door read open; unknown, disabled or locked out: refused. After a command, the next one of that door waits until it is read where it was sent, at least 15 s and at most 45 s later. A close is never held by a pause asked by the controller. Without the permission, a scene or a voice assistant \"close the garage\" is refused too.",
+        "fr": "Chaque porte a deux boutons, jamais un interrupteur. Le contrôleur envoie une impulsion à l'entrée bouton mural de la motorisation, une bascule sur la plupart des motorisations : une impulsion peut arrêter ou inverser une porte qui a bougé depuis sa lecture. Les deux boutons sont donc refusés tant que vous ne les autorisez pas ci-dessous. Gladys lit la porte juste avant chaque commande : « Ouvrir » seulement vers une porte lue fermée, « Fermer » seulement vers une porte lue ouverte ; inconnue, désactivée ou bloquée : refusé. Après une commande, la suivante de cette porte attend qu'elle soit lue là où elle a été envoyée, 15 s au moins et 45 s au plus après. Une fermeture n'est jamais retenue par une pause demandée par le contrôleur. Sans l'autorisation, une scène ou un assistant vocal « ferme le garage » est refusé aussi."
+      }
+    },
+    {
+      "key": "allow_open",
+      "type": "boolean",
+      "label": {
+        "en": "Allow opening and closing the garage doors",
+        "fr": "Autoriser l’ouverture et la fermeture des portes de garage"
+      },
+      "description": {
+        "en": "Off by default: the doors are only read. On: the dashboard, the scenes and the voice assistants can open AND close the garage doors.",
+        "fr": "Désactivé par défaut : les portes sont seulement lues. Activé : le tableau de bord, les scènes et les assistants vocaux peuvent ouvrir ET fermer les portes de garage."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "language",
       "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
-      "required": false,
-      "default": "celsius",
-      "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
-      ]
-    },
-    {
-      "key": "poll_frequency",
-      "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "label": {
+        "en": "Language of the feature names",
+        "fr": "Langue des noms des fonctionnalités"
+      },
       "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+        "en": "Used for the names of the features added from now on, and for the command errors.",
+        "fr": "Sert aux noms des fonctionnalités ajoutées désormais, et aux erreurs des commandes."
       },
       "required": false,
-      "default": 300,
-      "min": 60,
-      "max": 3600
+      "default": "fr",
+      "options": [
+        {
+          "value": "fr",
+          "label": {
+            "en": "French",
+            "fr": "Français"
+          }
+        },
+        {
+          "value": "en",
+          "label": {
+            "en": "English",
+            "fr": "Anglais"
+          }
+        }
+      ]
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
+      "key": "check_controllers",
+      "label": {
+        "en": "Check the controllers",
+        "fr": "Vérifier les contrôleurs"
+      },
+      "description": {
+        "en": "Shows what each address answered, and reads once more an address that refused the key (never sooner than the refresh interval).",
+        "fr": "Affiche ce que chaque adresse a répondu, et relit une fois une adresse qui a refusé la clé (jamais plus vite que l'intervalle de rafraîchissement)."
+      },
       "timeout_seconds": 30
-    },
-    {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
-    }
-  ],
-  "scene_triggers": [
-    {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
-      "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
-      },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
-      "variables": [
-        {
-          "key": "target",
-          "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
-        }
-      ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
-      },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
     }
   ]
 }

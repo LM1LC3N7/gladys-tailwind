@@ -22,7 +22,7 @@ RUN npm ci --omit=dev || npm install --omit=dev
 # Then the integration code.
 COPY index.js ./
 COPY src ./src
-COPY gladys-assistant-integration.json ./
+COPY gladys-assistant-integration.json LICENSE THIRD_PARTY_NOTICES.md ./
 
 # The only writable location allowed at runtime. Docker creates a new volume
 # with the owner of the image's /data, so it must belong to `node`, and before

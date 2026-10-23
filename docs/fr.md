@@ -1,67 +1,103 @@
-# Template de démonstration
+# Tailwind
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Intégration Gladys pour les contrôleurs de porte de garage **Tailwind** (iQ3,
+Light), sur votre réseau local : l'état de chaque porte de garage, des boutons
+Ouvrir et Fermer, et la luminosité du voyant, par l'API locale du contrôleur,
+sans le cloud Tailwind.
 
-## Ce que vous obtenez
+> **Jamais testé avec un vrai appareil.** Cette première version a été écrite
+> à partir de la bibliothèque `gotailwind` (celle de l'intégration Home
+> Assistant) et testée seulement contre des contrôleurs simulés. Vos retours
+> sont les bienvenus.
+>
+> Intégration non officielle, sans lien avec Tailwind.
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+## Ce qu'il faut
+
+- Un contrôleur Tailwind avec le micrologiciel **10.10 ou plus récent** (à
+  mettre à jour dans l'application Tailwind), sur le même réseau que Gladys.
+- Une **adresse IP fixe** pour chaque contrôleur (une réservation DHCP dans
+  votre box).
+- Votre **clé de contrôle local** : connectez-vous à l'application web
+  Tailwind (web.gotailwind.com) avec votre compte Tailwind, et copiez la
+  « Local Control Key » (six caractères, par exemple 123456). Elle est la même pour tous les
+  contrôleurs du compte. Gladys ne parle jamais au cloud Tailwind : vous y
+  lisez seulement la clé.
 
 ## Configuration
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+1. Dans Gladys, ouvrez la configuration de l'intégration.
+2. Saisissez les adresses IP de vos contrôleurs, séparées par des virgules.
+3. Collez la clé de contrôle local. Ce champ est gardé par Gladys dans sa
+   base, jamais réaffiché, et envoyé seulement à vos contrôleurs, en clair
+   sur votre réseau local (leur API locale n'a pas de https).
+4. Enregistrez, puis ajoutez les contrôleurs depuis l'onglet **Découverte**.
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+La ligne d'état indique combien de contrôleurs répondent. **Vérifier les
+contrôleurs** affiche ce que chaque adresse a répondu.
 
-## Actions
+## Ce que vous obtenez
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+Un appareil Gladys par contrôleur (identifié par son adresse MAC : une
+nouvelle adresse IP ne change rien), avec pour chaque porte qu'il gère (1 à 3) :
 
-## Scènes
+| Fonctionnalité                | Type                | Remarques                                                   |
+| ----------------------------- | ------------------- | ----------------------------------------------------------- |
+| Porte de garage _n_           | capteur d'ouverture | ouverte ou fermée ; rien n'est publié si l'état est inconnu |
+| Ouvrir la porte de garage _n_ | bouton              | refusé tant que non autorisé (voir plus bas)                |
+| Fermer la porte de garage _n_ | bouton              | refusé tant que non autorisé (voir plus bas)                |
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+et **Luminosité du voyant** (0 à 100), qui ne demande aucune autorisation. Un
+changement de luminosité n'est confirmé que lorsque le voyant est relu à la
+valeur demandée ; sinon Gladys répond « envoyée, sans confirmation ».
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+## Sécurité des commandes
 
-## Tableau de bord
+Un contrôleur Tailwind ouvre et ferme une porte en envoyant une impulsion à
+l'entrée bouton mural de la motorisation. Sur la plupart des motorisations,
+cette entrée est une **bascule** : une impulsion donnée à une porte qui a
+bougé depuis sa lecture peut l'arrêter ou l'inverser. Donc :
 
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
+- **Ouvrir** et **Fermer** sont tous deux **refusés par défaut**. Activez
+  « Autoriser l’ouverture et la fermeture des portes de garage » pour les
+  utiliser (depuis le tableau de bord, les scènes et les assistants vocaux).
+  L'autorisation est vérifiée à l'arrivée de la commande, après la lecture de
+  la porte et juste avant le départ de la requête.
+- La porte n'est jamais un interrupteur : un « éteins tout » d'un assistant
+  vocal ou d'une scène ne peut jamais l'atteindre.
+- Gladys lit le contrôleur juste avant chaque commande et vérifie que c'est
+  bien le même (adresse MAC). **Ouvrir** n'est envoyé qu'à une porte lue
+  fermée, **Fermer** qu'à une porte lue ouverte ; déjà dans cet état : rien
+  n'est envoyé. Une porte dans un état inconnu, désactivée dans l'application
+  Tailwind ou bloquée par le contrôleur est refusée.
+- Après une commande, la suivante de cette porte attend que la porte soit lue
+  là où elle a été envoyée, 15 s au moins et 45 s au plus après (le capteur lit
+  « ouverte » dès que la porte quitte la position fermée, bien avant la fin de
+  course). Cette garde est enregistrée avant le départ de la requête : un
+  redémarrage la conserve.
+- Un **Fermer** annule les ouvertures de sa porte pas encore parties. Il n'est
+  jamais retenu par une pause demandée par le contrôleur (HTTP 429 ou 5xx) ni
+  par une clé refusée : il a un essai, jamais renouvelé.
+- Une commande part dans les 3,5 s du clic ou est refusée sans rien envoyer.
+  Si elle a pu atteindre le contrôleur sans réponse, Gladys indique
+  « envoyée, sans confirmation » et relit la porte ; elle n'est jamais
+  renvoyée. Une réponse positive signifie que le contrôleur a accepté la
+  commande : la porte bouge ensuite pendant 10 à 30 s et son état suit dans
+  Gladys.
 
-## Dépannage
+## Limites
 
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+- Lecture périodique seulement (toutes les 10 s par défaut, de 5 s à 300 s),
+  jamais plus souvent que l'intervalle, même après un redémarrage. HTTP 429 ou
+  5xx : une pause de 1 min à 6 h.
+- Une clé refusée par un contrôleur l'est définitivement pour ce contrôleur :
+  il n'est plus lu avec cette clé tant que vous n'en enregistrez pas une autre,
+  ou que vous n'appuyez pas sur « Vérifier les contrôleurs » une fois la clé
+  corrigée (une lecture, jamais plus souvent que l'intervalle). La clé n'est
+  jamais écrite dans les journaux ni dans les fichiers de l'intégration :
+  seule une empreinte salée d'une clé refusée est gardée, et effacée au
+  premier succès.
+- Le mode nuit, les notifications envoyées par le contrôleur et la découverte
+  mDNS ne sont pas encore pris en charge.
+- La plupart des contrôleurs Tailwind sont vendus en Amérique du Nord :
+  l'intégration peut avoir peu d'utilité ailleurs.

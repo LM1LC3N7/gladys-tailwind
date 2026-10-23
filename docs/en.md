@@ -1,61 +1,95 @@
-# Demo Devices Template
+# Tailwind
 
-This is the user documentation of the integration. Gladys re-hosts this file
-and shows a permanent **Documentation** link to it in the Configuration screen
-(in the user's language, with English as the fallback) — it is when
-configuring that the user needs it most. Keep the short onboarding hints in
-the `section` blocks of the manifest `config_schema`; put the long
-step-by-step (screenshots, troubleshooting…) here.
+Gladys integration for **Tailwind** garage door controllers (iQ3, Light), on
+your local network: the state of each garage door, Open and Close buttons, and
+the brightness of the status LED, through the local API of the controller,
+without the Tailwind cloud.
+
+> **Never tested with a real device.** This first version was built from the
+> `gotailwind` library (the one of the Home Assistant integration) and tested
+> against simulated controllers only. Feedback welcome.
+>
+> Unofficial integration, not affiliated with Tailwind.
+
+## What you need
+
+- A Tailwind controller with firmware **10.10 or later** (update it in the
+  Tailwind app), on the same network as Gladys.
+- A **fixed IP address** for each controller (a DHCP reservation in your
+  router).
+- Your **local control key**: sign in to the Tailwind web app
+  (web.gotailwind.com) with your Tailwind account, and copy the six-digit
+  "Local Control Key". It is the same for every controller of the account.
+  Gladys never talks to the Tailwind cloud: you only read the key there.
+
+## Setup
+
+1. In Gladys, open the integration configuration.
+2. Type the IP addresses of your controllers, separated by commas.
+3. Paste the local control key. This field is kept by Gladys in its database,
+   never shown again, and sent only to your controllers, in clear on your
+   local network (their local API has no https).
+4. Save, then add the controllers from the **Discovery** tab.
+
+The status line says how many controllers answer. **Check the controllers**
+shows what each address answered.
 
 ## What you get
 
-Six demo devices show up after installation: a weather station (real data
-from Open-Meteo), a switch, a dimmable light, a smart plug with power
-metering, a motion sensor and a camera.
+One Gladys device per controller (identified by its MAC address: a new IP
+address changes nothing), with for each door it manages (1 to 3):
 
-## Configuration
+| Feature               | Type           | Notes                                          |
+| --------------------- | -------------- | ---------------------------------------------- |
+| Garage door _n_       | opening sensor | open or closed; nothing published when unknown |
+| Open garage door _n_  | button         | refused until allowed (see below)              |
+| Close garage door _n_ | button         | refused until allowed (see below)              |
 
-1. Open the **Configuration** tab of the integration.
-2. Set the **latitude** and **longitude** the demo weather station should
-   observe (they default to Paris), and pick your temperature unit.
-   The **refresh interval** sets how often the weather station and the
-   plug's power are read: every 5 minutes by default, every minute at most.
-3. Save: the devices appear in the **Discovery** tab, ready to be added.
+and **Status LED brightness** (0 to 100), which needs no permission. A
+brightness change is confirmed only when the LED is read back at the value
+asked; otherwise Gladys answers "sent, without confirmation".
 
-The **Prefer the local connection** toggle drives the demo plug: it reports
-the channel it actually uses as a badge (local or cloud), with an orange dot
-when it runs degraded (local refused, cloud fallback).
+## Command safety
 
-## Actions
+A Tailwind controller opens and closes a door by pulsing the wall-button input
+of the opener. On most openers that input is a **toggle**: a pulse given to a
+door that moved since it was read can stop or reverse it. So:
 
-- **Test the weather provider** — performs a live request to Open-Meteo and
-  shows the current temperature and humidity under the button.
-- **Identify a device** — pick one of your devices in the list and it will
-  signal itself (the demo light "blinks" in the logs).
+- **Open** and **Close** are both **refused by default**. Turn on "Allow
+  opening and closing the garage doors" to use them (from the dashboard, the
+  scenes and the voice assistants alike). The permission is checked when the
+  command arrives, after the door is read and right before the request leaves.
+- The door is never a switch: a "turn everything off" from a voice assistant
+  or a scene can never reach it.
+- Gladys reads the controller just before each command and checks that it is
+  the same controller (MAC). **Open** is sent only to a door read closed,
+  **Close** only to a door read open; already there: nothing is sent. A door
+  in an unknown state, disabled in the Tailwind app or locked out by the
+  controller is refused.
+- After a command, the next one of that door waits until the door is read
+  where it was sent, at least 15 s and at most 45 s later (the sensor reads
+  "open" as soon as the door leaves closed, long before the end of travel).
+  This guard is saved before the request leaves, so a restart keeps it.
+- A **Close** cancels the openings of its door that have not left yet. It is
+  never held by a pause asked by the controller (HTTP 429 or 5xx) nor by a
+  refused key: it gets one try, never retried.
+- A command leaves within 3.5 s of the click or is refused without sending
+  anything. If it may have reached the controller without an answer, Gladys
+  says "sent, without confirmation" and reads the door again; it is never
+  retried. A successful answer means the controller accepted the command: the
+  door then moves for 10 to 30 s and its state follows in Gladys.
 
-## Scenes
+## Limits
 
-The integration adds its own cards to the scene editor (Gladys 5.1 or
-later), under the **Integrations** category:
-
-- **Motion detected** (trigger) — starts the scene when a demo motion sensor
-  sees something move. Optionally pick the sensor and what moved (person,
-  animal); left empty, any detection matches. The following actions can
-  read what moved with `{{triggerEvent.data.target}}`.
-- **Identify a device** (action) — makes the chosen device signal itself.
-  It returns whether the device could signal itself, so the following
-  actions can depend on it.
-
-## Dashboard
-
-Add the **Demo status** widget to a dashboard: it shows the live
-temperature of the weather station and the power of the office plug, the
-connection the plug currently uses (orange when degraded) and the observed
-location. Its **Identify the light** button makes the demo light signal
-itself.
-
-## Troubleshooting
-
-The integration logs everything it does: check the integration logs from the
-Gladys UI (or `docker logs` on the host) with `LOG_LEVEL=debug` for the full
-detail.
+- Polling only (every 10 s by default, 5 s to 300 s), never sooner than the
+  interval, even after a restart. HTTP 429 or 5xx: a pause of 1 min to 6 h.
+- A key refused by a controller is final for that controller: it is not read
+  again with that key until you save another key, or press "Check the
+  controllers" once the key is fixed (one read, never sooner than the
+  interval). The key is never written in the logs nor in the integration
+  files: only a salted fingerprint of a refused key is kept, and removed at
+  the first success.
+- The night mode, the notifications pushed by the controller and the mDNS
+  discovery are not handled yet.
+- Most Tailwind controllers are sold in North America: the integration may
+  be of little use elsewhere.

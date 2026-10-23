@@ -12,44 +12,34 @@ the notes of the version's GitHub Release.
 
 ### Added
 
-- A working example of scene triggers, scene actions and dashboard widgets
-  (Gladys 5.1.0 or later).
-- `CHANGELOG.md`, rolled by the Release workflow.
-- A GitHub Release for every version, with its changelog section as notes: the
-  Gladys Supervision page links each version to the repository's releases.
-- CI runs the tests on Node 22 and 24, and builds the Docker image.
-- Dependabot keeps the npm dependencies and the GitHub Actions up to date.
-- `SECURITY.md` (how to report a vulnerability) and `CLAUDE.md` (project rules
-  for contributors and coding assistants).
-- Manifest tests: `version` matches `package.json`, `docker_image` is tagged
-  with it, descriptions hold 10 to 100 characters, placeholders are
-  multi-language objects.
-- The latitude and longitude fields show an example value as placeholder.
+- Tailwind garage door controllers (iQ3, Light) over their local API, without
+  the cloud: added by IP address with the local control key, identified by
+  their MAC at every read (a new address changes nothing); firmware 10.10 or
+  later.
+- The state of each garage door (open or closed; nothing published when
+  unknown) and the brightness of the status LED (confirmed only by the value
+  read back).
+- Open and Close buttons for each door, never a switch. The controller pulses
+  the opener (a toggle on most openers), so every command is decided on the
+  door read just now: "Open" only to a closed door, "Close" only to an open
+  one; unknown, disabled or locked out is refused. Both are off by default
+  ("Allow opening and closing the garage doors"); one queue per controller, a
+  close cancels the pending openings of its door and is never held by a
+  pause asked by the controller nor by a refused key (one try).
+- After a command, another one of that door waits until a read sent after it
+  shows the door where it was sent, at least 15 s and at most 45 s after it.
+  The guard is set and saved before the first byte leaves, so a restart keeps
+  it.
+- Commands sent within 3.5 s or refused unsent, "sent, without confirmation"
+  when no answer came back.
+- Key refused ("token fail"): final for that controller, never replayed; read
+  again only with another key or by "Check the controllers" (never sooner
+  than the interval). The key is never logged nor stored, and a key that works
+  on any controller is never fingerprinted in `/data`.
+- Never read sooner than the refresh interval, after a restart included (the
+  status then shows the outcome of the last read); HTTP 429 or 5xx: a pause
+  of 1 min to 6 h; other failures: 30 s to 5 min.
+- "Check the controllers" action; reachability on the transport badge; states
+  within the Gladys rate limit.
 
-### Changed
-
-- Node.js 22 or later is required (Node 20 is end-of-life).
-- Integration SDK 0.15.0. The tests now run against the fake Gladys of the
-  SDK, which refuses the payloads Gladys refuses.
-- The refresh interval is one minute minimum, the fastest Gladys polls a
-  device. The plug's power is only sent when it changes, and every 30
-  minutes otherwise.
-
-### Fixed
-
-- Gladys refused the devices of the Discovery tab: the weather station and
-  the plug declared their poll frequency in seconds instead of one of the
-  values Gladys accepts, and were never polled. They now poll every minute,
-  and the readings follow the refresh interval of the configuration.
-
-- The release commit no longer fails `npm run format:check`: the Release
-  workflow updates the manifest `version` and `docker_image` in place instead
-  of re-printing the whole file with `jq`.
-- The integration can write to `/data`: the image creates the directory owned
-  by the `node` user, a new Docker volume was owned by root.
-- A sub-container running the integration's own image follows it to the new
-  tag at each release, as well as in the manifest of the build summary: it kept
-  the previous tag, which may not exist on the registry. Sub-containers on a
-  third-party image (a broker, a database...) keep theirs.
-
-[Unreleased]: https://github.com/GladysAssistant/integration-template-js/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-tailwind/commits/main
